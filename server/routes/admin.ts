@@ -30,6 +30,38 @@ const escapeHtml = (str: string): string => {
 };
 
 /**
+ * LIKE 模式消毒，防止特殊字符操纵搜索
+ * 转义 %, _, \ 字符
+ */
+const sanitizeLikePattern = (str: string): string => {
+  if (typeof str !== 'string') return str;
+  return str.replace(/[%_\\]/g, '\\$&');
+};
+
+/**
+ * 验证用户状态值
+ */
+const VALID_USER_STATUS = ['active', 'frozen'];
+const isValidUserStatus = (status: string): boolean => {
+  return VALID_USER_STATUS.includes(status);
+};
+
+/**
+ * 验证合伙人等级值
+ */
+const VALID_PARTNER_LEVELS = ['none', 'junior', 'middle', 'senior'];
+const isValidPartnerLevel = (level: string): boolean => {
+  return VALID_PARTNER_LEVELS.includes(level);
+};
+
+/**
+ * 验证日期格式 (YYYY-MM-DD)
+ */
+const isValidDateFormat = (date: string): boolean => {
+  return /^\d{4}-\d{2}-\d{2}$/.test(date);
+};
+
+/**
  * 验证商品数据
  */
 const validateProductData = (data: any, isUpdate: boolean = false): { valid: boolean; error?: string } => {
@@ -708,10 +740,39 @@ router.get('/orders', async (req: Request, res: Response) => {
       });
     }
 
+    // 获取订单用户信息
+    const userIds = [...new Set((orders || []).map((o: any) => o.user_id))];
+    let users: any[] = [];
+    if (userIds.length > 0) {
+      const { data: userData } = await supabaseAdmin
+        .from('users')
+        .select('id, name, phone')
+        .in('id', userIds);
+      users = userData || [];
+    }
+
+    // 获取订单商品信息
+    const orderIds = (orders || []).map((o: any) => o.id);
+    let orderItems: any[] = [];
+    if (orderIds.length > 0) {
+      const { data: itemsData } = await supabaseAdmin
+        .from('order_items')
+        .select('order_id, product_name, product_image, spec, price, quantity')
+        .in('order_id', orderIds);
+      orderItems = itemsData || [];
+    }
+
+    // 组装数据
+    const ordersWithDetails = (orders || []).map((order: any) => ({
+      ...order,
+      user: users.find(u => u.id === order.user_id) || { name: '未知', phone: '-' },
+      items: orderItems.filter(item => item.order_id === order.id)
+    }));
+
     res.json({
       success: true,
       data: {
-        list: orders || [],
+        list: ordersWithDetails || [],
         total: count || 0,
         page: pageNum,
         pageSize: pageSizeNum
@@ -725,6 +786,70 @@ router.get('/orders', async (req: Request, res: Response) => {
         code: 'SERVER_ERROR',
         message: '服务器错误'
       }
+    });
+  }
+});
+
+/**
+ * GET /api/admin/orders/:id
+ * 订单详情
+ */
+router.get('/orders/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    // 获取订单基本信息
+    const { data: order, error } = await supabaseAdmin
+      .from('orders')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (error || !order) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'ORDER_NOT_FOUND', message: '订单不存在' }
+      });
+    }
+
+    // 获取用户信息
+    const { data: user } = await supabaseAdmin
+      .from('users')
+      .select('id, name, phone')
+      .eq('id', order.user_id)
+      .single();
+
+    // 获取订单商品
+    const { data: items } = await supabaseAdmin
+      .from('order_items')
+      .select('id, product_id, product_name, product_image, spec, price, quantity')
+      .eq('order_id', id);
+
+    // 获取推荐人信息
+    let referrer = null;
+    if (order.referrer_id) {
+      const { data: referrerData } = await supabaseAdmin
+        .from('users')
+        .select('id, name, phone')
+        .eq('id', order.referrer_id)
+        .single();
+      referrer = referrerData;
+    }
+
+    res.json({
+      success: true,
+      data: {
+        ...order,
+        user,
+        items: items || [],
+        referrer
+      }
+    });
+  } catch (error) {
+    console.error('Get order detail error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
     });
   }
 });
@@ -785,6 +910,61 @@ router.put('/orders/:id/ship', async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * PUT /api/admin/orders/:id/cancel
+ * 取消订单（管理员）
+ */
+router.put('/orders/:id/cancel', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    // 检查订单是否存在
+    const { data: order, error: fetchError } = await supabaseAdmin
+      .from('orders')
+      .select('id, status')
+      .eq('id', id)
+      .single();
+
+    if (fetchError || !order) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'ORDER_NOT_FOUND', message: '订单不存在' }
+      });
+    }
+
+    // 只能取消待付款或待发货的订单
+    if (order.status !== 'pending_payment' && order.status !== 'pending_shipment') {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'CANNOT_CANCEL', message: '当前订单状态不能取消' }
+      });
+    }
+
+    const { error } = await supabaseAdmin
+      .from('orders')
+      .update({ status: 'cancelled' })
+      .eq('id', id);
+
+    if (error) {
+      return res.status(500).json({
+        success: false,
+        error: { code: 'CANCEL_FAILED', message: '取消订单失败' }
+      });
+    }
+
+    res.json({
+      success: true,
+      message: '订单已取消'
+    });
+  } catch (error) {
+    console.error('Cancel order error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
 // ===========================================
 // 用户管理
 // ===========================================
@@ -797,13 +977,43 @@ router.get('/users', async (req: Request, res: Response) => {
   try {
     const { page = 1, pageSize = 20, keyword, status, partner_level, start_date, end_date } = req.query;
 
+    // 参数验证
+    if (status && !isValidUserStatus(status as string)) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'INVALID_STATUS', message: '无效的状态参数' }
+      });
+    }
+    if (partner_level && !isValidPartnerLevel(partner_level as string)) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'INVALID_LEVEL', message: '无效的合伙人等级' }
+      });
+    }
+    if (start_date && !isValidDateFormat(start_date as string)) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'INVALID_DATE', message: '无效的开始日期格式，应为 YYYY-MM-DD' }
+      });
+    }
+    if (end_date && !isValidDateFormat(end_date as string)) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'INVALID_DATE', message: '无效的结束日期格式，应为 YYYY-MM-DD' }
+      });
+    }
+    if (start_date && end_date && new Date(start_date as string) > new Date(end_date as string)) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'INVALID_DATE_RANGE', message: '开始日期不能晚于结束日期' }
+      });
+    }
+
     let query = supabaseAdmin
       .from('users')
       .select('*', { count: 'exact' });
 
-    if (keyword) {
-      query = query.or(`name.ilike.%${keyword}%,phone.ilike.%${keyword}%,id.ilike.%${keyword}%`);
-    }
+    // 先应用简单筛选条件
     if (status) {
       query = query.eq('status', status);
     }
@@ -815,6 +1025,12 @@ router.get('/users', async (req: Request, res: Response) => {
     }
     if (end_date) {
       query = query.lte('created_at', end_date);
+    }
+
+    // 关键词搜索 - 支持姓名和手机号
+    if (keyword) {
+      // 使用 or 条件搜索姓名或手机号
+      query = query.or(`name.ilike.%${keyword}%,phone.ilike.%${keyword}%`);
     }
 
     query = query.order('created_at', { ascending: false });
@@ -860,6 +1076,344 @@ router.get('/users', async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/admin/users/:id
+ * 用户详情
+ */
+router.get('/users/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    // 获取用户基本信息
+    const { data: user, error } = await supabaseAdmin
+      .from('users')
+      .select(`
+        id, name, phone, avatar, status, is_partner, partner_level,
+        invite_code, referrer_id, balance, total_income,
+        gender, birthday, email, created_at, updated_at
+      `)
+      .eq('id', id)
+      .single();
+
+    if (error || !user) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'USER_NOT_FOUND', message: '用户不存在' }
+      });
+    }
+
+    // 获取推荐人信息
+    let referrer = null;
+    if (user.referrer_id) {
+      const { data: referrerData } = await supabaseAdmin
+        .from('users')
+        .select('id, name, phone')
+        .eq('id', user.referrer_id)
+        .single();
+      if (referrerData) {
+        referrer = {
+          id: referrerData.id,
+          name: referrerData.name || '未设置',
+          phone: referrerData.phone
+        };
+      }
+    }
+
+    // 获取团队人数（直接推荐的用户数）
+    const { count: teamSize } = await supabaseAdmin
+      .from('users')
+      .select('*', { count: 'exact', head: true })
+      .eq('referrer_id', id);
+
+    // 获取订单统计
+    const { data: orderStats } = await supabaseAdmin
+      .from('orders')
+      .select('paid_amount, status')
+      .eq('user_id', id);
+
+    const orderSummary = {
+      total: orderStats?.length || 0,
+      totalAmount: orderStats?.reduce((sum, o) => sum + (o.paid_amount || 0), 0) || 0,
+      completed: orderStats?.filter(o => o.status === 'completed').length || 0,
+      pending: orderStats?.filter(o => o.status === 'pending_payment' || o.status === 'pending_shipment').length || 0
+    };
+
+    res.json({
+      success: true,
+      data: {
+        ...user,
+        referrer,
+        team_size: teamSize || 0,
+        order_summary: orderSummary
+      }
+    });
+  } catch (error) {
+    console.error('Get user detail error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * GET /api/admin/users/:id/orders
+ * 用户订单列表
+ */
+router.get('/users/:id/orders', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { page = 1, pageSize = 10, status } = req.query;
+
+    let query = supabaseAdmin
+      .from('orders')
+      .select('*', { count: 'exact' })
+      .eq('user_id', id);
+
+    if (status) {
+      query = query.eq('status', status);
+    }
+
+    query = query.order('created_at', { ascending: false });
+
+    const pageNum = Math.max(1, parseInt(page as string) || 1);
+    const pageSizeNum = Math.min(50, Math.max(1, parseInt(pageSize as string) || 10));
+    const offset = (pageNum - 1) * pageSizeNum;
+
+    query = query.range(offset, offset + pageSizeNum - 1);
+
+    const { data: orders, error, count } = await query;
+
+    if (error) {
+      console.error('Get user orders error:', error);
+      return res.status(500).json({
+        success: false,
+        error: { code: 'QUERY_ERROR', message: '查询订单失败' }
+      });
+    }
+
+    // 获取订单商品
+    const orderIds = (orders || []).map((o: any) => o.id);
+    let orderItems: any[] = [];
+
+    if (orderIds.length > 0) {
+      const { data: items } = await supabaseAdmin
+        .from('order_items')
+        .select('order_id, product_name, quantity, price')
+        .in('order_id', orderIds);
+      orderItems = items || [];
+    }
+
+    const ordersWithItems = (orders || []).map((order: any) => ({
+      ...order,
+      items: orderItems.filter(item => item.order_id === order.id)
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        list: ordersWithItems || [],
+        total: count || 0,
+        page: pageNum,
+        pageSize: pageSizeNum
+      }
+    });
+  } catch (error) {
+    console.error('Get user orders error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * GET /api/admin/users/:id/income
+ * 用户收益记录
+ */
+router.get('/users/:id/income', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { page = 1, pageSize = 10, type } = req.query;
+
+    let query = supabaseAdmin
+      .from('income_records')
+      .select('*', { count: 'exact' })
+      .eq('user_id', id);
+
+    if (type) {
+      query = query.eq('type', type);
+    }
+
+    query = query.order('created_at', { ascending: false });
+
+    const pageNum = Math.max(1, parseInt(page as string) || 1);
+    const pageSizeNum = Math.min(50, Math.max(1, parseInt(pageSize as string) || 10));
+    const offset = (pageNum - 1) * pageSizeNum;
+
+    query = query.range(offset, offset + pageSizeNum - 1);
+
+    const { data: records, error, count } = await query;
+
+    if (error) {
+      return res.status(500).json({
+        success: false,
+        error: { code: 'QUERY_ERROR', message: '查询收益记录失败' }
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        list: records || [],
+        total: count || 0,
+        page: pageNum,
+        pageSize: pageSizeNum
+      }
+    });
+  } catch (error) {
+    console.error('Get user income error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * GET /api/admin/users/:id/addresses
+ * 用户收货地址
+ */
+router.get('/users/:id/addresses', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const { data: addresses, error } = await supabaseAdmin
+      .from('addresses')
+      .select('*')
+      .eq('user_id', id)
+      .order('is_default', { ascending: false });
+
+    if (error) {
+      return res.status(500).json({
+        success: false,
+        error: { code: 'QUERY_ERROR', message: '查询地址失败' }
+      });
+    }
+
+    res.json({
+      success: true,
+      data: addresses || []
+    });
+  } catch (error) {
+    console.error('Get user addresses error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * GET /api/admin/users/:id/cellar
+ * 用户酒窖
+ */
+router.get('/users/:id/cellar', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const { data: items, error } = await supabaseAdmin
+      .from('cellar_items')
+      .select('*')
+      .eq('user_id', id)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('Get user cellar error:', error);
+      return res.status(500).json({
+        success: false,
+        error: { code: 'QUERY_ERROR', message: '查询酒窖失败' }
+      });
+    }
+
+    // 获取商品信息
+    const productIds = (items || []).map((item: any) => item.product_id).filter(Boolean);
+    let products: any[] = [];
+
+    if (productIds.length > 0) {
+      const { data: productData } = await supabaseAdmin
+        .from('products')
+        .select('id, name, images, price')
+        .in('id', productIds);
+      products = productData || [];
+    }
+
+    const itemsWithProducts = (items || []).map((item: any) => ({
+      ...item,
+      product: products.find(p => p.id === item.product_id) || null
+    }));
+
+    res.json({
+      success: true,
+      data: itemsWithProducts
+    });
+  } catch (error) {
+    console.error('Get user cellar error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * GET /api/admin/users/:id/team
+ * 用户团队（推荐关系）
+ */
+router.get('/users/:id/team', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    // 获取直接推荐的用户（一级）
+    const { data: directMembers, error } = await supabaseAdmin
+      .from('users')
+      .select('id, name, phone, partner_level, created_at')
+      .eq('referrer_id', id);
+
+    if (error) {
+      return res.status(500).json({
+        success: false,
+        error: { code: 'QUERY_ERROR', message: '查询团队失败' }
+      });
+    }
+
+    // 获取每个直接成员的团队人数
+    const directWithTeamSize = await Promise.all(
+      (directMembers || []).map(async (member) => {
+        const { count } = await supabaseAdmin
+          .from('users')
+          .select('*', { count: 'exact', head: true })
+          .eq('referrer_id', member.id);
+        return { ...member, team_size: count || 0 };
+      })
+    );
+
+    res.json({
+      success: true,
+      data: {
+        direct: directWithTeamSize,
+        directCount: directMembers?.length || 0
+      }
+    });
+  } catch (error) {
+    console.error('Get user team error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
  * PUT /api/admin/users/:id/status
  * 更新用户状态
  */
@@ -867,23 +1421,53 @@ router.put('/users/:id/status', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
+    const adminId = (req as any).user?.id;
 
-    if (!['active', 'frozen'].includes(status)) {
+    if (!isValidUserStatus(status)) {
       return res.status(400).json({
         success: false,
         error: {
           code: 'INVALID_STATUS',
-          message: '无效的状态'
+          message: '无效的状态，应为 active 或 frozen'
         }
       });
     }
 
-    const { error } = await supabaseAdmin
+    // 先获取用户当前状态
+    const { data: existingUser, error: fetchError } = await supabaseAdmin
       .from('users')
-      .update({ status })
-      .eq('id', id);
+      .select('id, status, name')
+      .eq('id', id)
+      .single();
 
-    if (error) {
+    if (fetchError || !existingUser) {
+      return res.status(404).json({
+        success: false,
+        error: {
+          code: 'USER_NOT_FOUND',
+          message: '用户不存在'
+        }
+      });
+    }
+
+    const oldStatus = existingUser.status;
+
+    // 如果状态相同，无需更新
+    if (oldStatus === status) {
+      return res.json({
+        success: true,
+        message: '用户状态未改变'
+      });
+    }
+
+    // 更新状态
+    const { data: updatedUser, error: updateError } = await supabaseAdmin
+      .from('users')
+      .update({ status, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select('id, status');
+
+    if (updateError) {
       return res.status(500).json({
         success: false,
         error: {
@@ -893,9 +1477,31 @@ router.put('/users/:id/status', async (req: Request, res: Response) => {
       });
     }
 
+    // 记录操作日志
+    try {
+      await supabaseAdmin
+        .from('operation_logs')
+        .insert({
+          admin_id: adminId,
+          action: 'UPDATE_USER_STATUS',
+          target_type: 'user',
+          target_id: id,
+          details: {
+            user_name: existingUser.name,
+            old_status: oldStatus,
+            new_status: status
+          },
+          created_at: new Date().toISOString()
+        });
+    } catch (logError) {
+      // 日志记录失败不影响主操作
+      console.error('Failed to log operation:', logError);
+    }
+
     res.json({
       success: true,
-      message: '更新成功'
+      message: '更新成功',
+      data: updatedUser
     });
   } catch (error) {
     console.error('Update user status error:', error);
@@ -923,16 +1529,35 @@ router.get('/partners', async (req: Request, res: Response) => {
 
     let query = supabaseAdmin
       .from('users')
-      .select('*', { count: 'exact' })
+      .select('id, name, phone, avatar, partner_level, is_partner, status, referrer_id, created_at, balance, personal_sales, team_sales', { count: 'exact' })
       .eq('is_partner', true);
 
     if (keyword) {
-      query = query.or(`name.ilike.%${keyword}%,phone.ilike.%${keyword}%`);
+      const sanitizedKeyword = sanitizeLikePattern(keyword as string);
+      query = query.or(`name.ilike.%${sanitizedKeyword}%,phone.ilike.%${sanitizedKeyword}%`);
     }
     if (level) {
+      if (!isValidPartnerLevel(level as string)) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_LEVEL',
+            message: '无效的合伙人等级'
+          }
+        });
+      }
       query = query.eq('partner_level', level);
     }
     if (status) {
+      if (!isValidUserStatus(status as string)) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_STATUS',
+            message: '无效的状态'
+          }
+        });
+      }
       query = query.eq('status', status);
     }
 
@@ -957,10 +1582,33 @@ router.get('/partners', async (req: Request, res: Response) => {
       });
     }
 
+    // 获取推荐人信息
+    const referrerIds = partners?.filter(p => p.referrer_id).map(p => p.referrer_id) || [];
+    let referrers: Record<string, { id: string; name: string; phone: string; partner_level: string }> = {};
+
+    if (referrerIds.length > 0) {
+      const { data: referrerUsers } = await supabaseAdmin
+        .from('users')
+        .select('id, name, phone, partner_level')
+        .in('id', referrerIds);
+
+      if (referrerUsers) {
+        referrerUsers.forEach(r => {
+          referrers[r.id] = r;
+        });
+      }
+    }
+
+    // 合并推荐人信息
+    const enrichedPartners = partners?.map(p => ({
+      ...p,
+      referrer: p.referrer_id ? referrers[p.referrer_id] || null : null
+    })) || [];
+
     res.json({
       success: true,
       data: {
-        list: partners || [],
+        list: enrichedPartners,
         total: count || 0,
         page: pageNum,
         pageSize: pageSizeNum
@@ -968,6 +1616,339 @@ router.get('/partners', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('Get partners error:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'SERVER_ERROR',
+        message: '服务器错误'
+      }
+    });
+  }
+});
+
+/**
+ * GET /api/admin/partners/:id
+ * 合伙人详情
+ */
+router.get('/partners/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    // 获取合伙人基本信息
+    const { data: partner, error } = await supabaseAdmin
+      .from('users')
+      .select('id, name, phone, avatar, partner_level, is_partner, status, referrer_id, created_at, balance, personal_sales, team_sales')
+      .eq('id', id)
+      .eq('is_partner', true)
+      .single();
+
+    if (error || !partner) {
+      return res.status(404).json({
+        success: false,
+        error: {
+          code: 'PARTNER_NOT_FOUND',
+          message: '合伙人不存在'
+        }
+      });
+    }
+
+    // 获取推荐人信息
+    let referrer = null;
+    if (partner.referrer_id) {
+      const { data: referrerUser } = await supabaseAdmin
+        .from('users')
+        .select('id, name, phone, partner_level')
+        .eq('id', partner.referrer_id)
+        .single();
+      if (referrerUser) {
+        referrer = {
+          id: referrerUser.id,
+          name: referrerUser.name,
+          phone: referrerUser.phone,
+          level: referrerUser.partner_level
+        };
+      }
+    }
+
+    // 统计直推人数
+    const { count: directCount } = await supabaseAdmin
+      .from('users')
+      .select('*', { count: 'exact', head: true })
+      .eq('referrer_id', id);
+
+    // 统计团队总人数 (包括间推)
+    // 先获取直推用户，再统计他们的直推人数
+    const { data: directUsers } = await supabaseAdmin
+      .from('users')
+      .select('id')
+      .eq('referrer_id', id);
+
+    let indirectCount = 0;
+    if (directUsers && directUsers.length > 0) {
+      const directIds = directUsers.map(u => u.id);
+      const { count: indirect } = await supabaseAdmin
+        .from('users')
+        .select('*', { count: 'exact', head: true })
+        .in('referrer_id', directIds);
+      indirectCount = indirect || 0;
+    }
+
+    // 累计佣金收益
+    const { data: incomeRecords } = await supabaseAdmin
+      .from('income_records')
+      .select('amount')
+      .eq('user_id', id)
+      .eq('status', 'completed');
+
+    const totalCommission = incomeRecords?.reduce((sum, r) => sum + r.amount, 0) || 0;
+
+    // 已提现金额
+    const { data: withdrawals } = await supabaseAdmin
+      .from('withdrawals')
+      .select('amount')
+      .eq('user_id', id)
+      .eq('status', 'success');
+
+    const withdrawnAmount = withdrawals?.reduce((sum, w) => sum + w.amount, 0) || 0;
+
+    // 获取合伙人申请记录 (最近一次)
+    const { data: application } = await supabaseAdmin
+      .from('partner_applications')
+      .select('level, applied_at, reviewed_at')
+      .eq('user_id', id)
+      .eq('status', 'approved')
+      .order('reviewed_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    res.json({
+      success: true,
+      data: {
+        ...partner,
+        referrer,
+        teamSize: (directCount || 0) + indirectCount,
+        directInvites: directCount || 0,
+        indirectInvites: indirectCount,
+        totalCommission,
+        currentBalance: partner.balance || 0,
+        withdrawnAmount,
+        joinDate: application?.applied_at || partner.created_at,
+        upgradeDate: application?.reviewed_at || null
+      }
+    });
+  } catch (error) {
+    console.error('Get partner detail error:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'SERVER_ERROR',
+        message: '服务器错误'
+      }
+    });
+  }
+});
+
+/**
+ * GET /api/admin/partners/:id/team
+ * 合伙人团队成员
+ */
+router.get('/partners/:id/team', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { page = 1, pageSize = 20, type } = req.query;
+
+    const pageNum = Math.max(1, parseInt(page as string) || 1);
+    const pageSizeNum = Math.min(100, Math.max(1, parseInt(pageSize as string) || 20));
+    const offset = (pageNum - 1) * pageSizeNum;
+
+    let teamMembers: any[] = [];
+    let total = 0;
+
+    if (type === 'direct' || type === 'all') {
+      // 直推成员
+      const { data: directUsers, count: directCount } = await supabaseAdmin
+        .from('users')
+        .select('id, name, phone, partner_level, created_at, referrer_id', { count: 'exact' })
+        .eq('referrer_id', id)
+        .range(offset, offset + pageSizeNum - 1);
+
+      if (directUsers) {
+        // 获取每个直推成员贡献的佣金
+        for (const user of directUsers) {
+          const { data: orders } = await supabaseAdmin
+            .from('orders')
+            .select('paid_amount')
+            .eq('user_id', user.id)
+            .in('status', ['completed', 'shipped']);
+
+          const contribution = orders?.reduce((sum, o) => sum + o.paid_amount, 0) || 0;
+          teamMembers.push({
+            ...user,
+            type: '直推',
+            contribution
+          });
+        }
+        if (type === 'direct') total = directCount || 0;
+      }
+    }
+
+    if (type === 'indirect' || type === 'all') {
+      // 先获取直推用户ID
+      const { data: directUsers } = await supabaseAdmin
+        .from('users')
+        .select('id')
+        .eq('referrer_id', id);
+
+      if (directUsers && directUsers.length > 0) {
+        const directIds = directUsers.map(u => u.id);
+        const { data: indirectUsers, count: indirectCount } = await supabaseAdmin
+          .from('users')
+          .select('id, name, phone, partner_level, created_at, referrer_id', { count: 'exact' })
+          .in('referrer_id', directIds)
+          .range(type === 'indirect' ? offset : 0, type === 'indirect' ? offset + pageSizeNum - 1 : pageSizeNum - 1);
+
+        if (indirectUsers) {
+          for (const user of indirectUsers) {
+            const { data: orders } = await supabaseAdmin
+              .from('orders')
+              .select('paid_amount')
+              .eq('user_id', user.id)
+              .in('status', ['completed', 'shipped']);
+
+            const contribution = orders?.reduce((sum, o) => sum + o.paid_amount, 0) || 0;
+            teamMembers.push({
+              ...user,
+              type: '间推',
+              contribution
+            });
+          }
+          if (type === 'indirect') total = indirectCount || 0;
+        }
+      }
+    }
+
+    if (type === 'all') {
+      // 计算总数
+      const { count: directCount } = await supabaseAdmin
+        .from('users')
+        .select('*', { count: 'exact', head: true })
+        .eq('referrer_id', id);
+
+      const { data: directUsers } = await supabaseAdmin
+        .from('users')
+        .select('id')
+        .eq('referrer_id', id);
+
+      let indirectCount = 0;
+      if (directUsers && directUsers.length > 0) {
+        const directIds = directUsers.map(u => u.id);
+        const { count } = await supabaseAdmin
+          .from('users')
+          .select('*', { count: 'exact', head: true })
+          .in('referrer_id', directIds);
+        indirectCount = count || 0;
+      }
+
+      total = (directCount || 0) + indirectCount;
+    }
+
+    res.json({
+      success: true,
+      data: {
+        list: teamMembers,
+        total,
+        page: pageNum,
+        pageSize: pageSizeNum
+      }
+    });
+  } catch (error) {
+    console.error('Get partner team error:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'SERVER_ERROR',
+        message: '服务器错误'
+      }
+    });
+  }
+});
+
+/**
+ * GET /api/admin/partners/:id/income
+ * 合伙人佣金明细
+ */
+router.get('/partners/:id/income', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { page = 1, pageSize = 20, type } = req.query;
+
+    let query = supabaseAdmin
+      .from('income_records')
+      .select('*', { count: 'exact' })
+      .eq('user_id', id);
+
+    if (type) {
+      query = query.eq('type', type);
+    }
+
+    query = query.order('created_at', { ascending: false });
+
+    const pageNum = Math.max(1, parseInt(page as string) || 1);
+    const pageSizeNum = Math.min(100, Math.max(1, parseInt(pageSize as string) || 20));
+    const offset = (pageNum - 1) * pageSizeNum;
+
+    query = query.range(offset, offset + pageSizeNum - 1);
+
+    const { data: records, error, count } = await query;
+
+    if (error) {
+      return res.status(500).json({
+        success: false,
+        error: {
+          code: 'QUERY_ERROR',
+          message: '查询失败'
+        }
+      });
+    }
+
+    // 补充订单和购买用户信息
+    const enrichedRecords = await Promise.all((records || []).map(async (record) => {
+      if (record.order_id) {
+        const { data: order } = await supabaseAdmin
+          .from('orders')
+          .select('id, paid_amount, user_id')
+          .eq('id', record.order_id)
+          .single();
+
+        if (order) {
+          const { data: buyer } = await supabaseAdmin
+            .from('users')
+            .select('name, phone')
+            .eq('id', order.user_id)
+            .single();
+
+          return {
+            ...record,
+            orderAmount: order.paid_amount,
+            buyerName: buyer?.name || '未知',
+            buyerPhone: buyer?.phone || ''
+          };
+        }
+      }
+      return record;
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        list: enrichedRecords,
+        total: count || 0,
+        page: pageNum,
+        pageSize: pageSizeNum
+      }
+    });
+  } catch (error) {
+    console.error('Get partner income error:', error);
     res.status(500).json({
       success: false,
       error: {
@@ -1072,6 +2053,28 @@ router.put('/partner-applications/:id/review', async (req: Request, res: Respons
       });
     }
 
+    // 幂等性检查：防止重复审核
+    if (application.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'ALREADY_REVIEWED',
+          message: `该申请已审核，当前状态: ${application.status}`
+        }
+      });
+    }
+
+    // 验证合伙人等级
+    if (status === 'approved' && !isValidPartnerLevel(application.level)) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'INVALID_LEVEL',
+          message: '无效的合伙人等级'
+        }
+      });
+    }
+
     const now = new Date().toISOString();
 
     // 更新申请状态
@@ -1104,6 +2107,24 @@ router.put('/partner-applications/:id/review', async (req: Request, res: Respons
         })
         .eq('id', application.user_id);
     }
+
+    // 记录操作日志
+    const adminUser = (req as any).user;
+    await supabaseAdmin
+      .from('operation_logs')
+      .insert({
+        admin_id: adminUser?.id || 'unknown',
+        action: 'review_partner_application',
+        target_type: 'partner_application',
+        target_id: id,
+        details: {
+          status,
+          note,
+          user_id: application.user_id,
+          level: application.level
+        },
+        created_at: now
+      });
 
     res.json({
       success: true,
@@ -1283,7 +2304,8 @@ router.get('/withdrawals', async (req: Request, res: Response) => {
       query = query.eq('status', status);
     }
     if (keyword) {
-      query = query.or(`withdrawal_no.ilike.%${keyword}%`);
+      const sanitizedKeyword = sanitizeLikePattern(keyword as string);
+      query = query.or(`withdrawal_no.ilike.%${sanitizedKeyword}%`);
     }
 
     query = query.order('created_at', { ascending: false });
@@ -1364,7 +2386,37 @@ router.put('/withdrawals/:id/process', async (req: Request, res: Response) => {
       });
     }
 
+    // 幂等性检查：防止重复处理
+    if (withdrawal.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'ALREADY_PROCESSED',
+          message: `该提现申请已处理，当前状态: ${withdrawal.status}`
+        }
+      });
+    }
+
     const now = new Date().toISOString();
+
+    // 如果拒绝，先退还余额（使用数据库原子函数）
+    if (status === 'rejected') {
+      const { data: balanceResult, error: balanceError } = await supabaseAdmin
+        .rpc('increment_user_balance', {
+          user_id: withdrawal.user_id,
+          amount: withdrawal.amount
+        });
+
+      if (balanceError || !balanceResult?.success) {
+        return res.status(500).json({
+          success: false,
+          error: {
+            code: 'BALANCE_UPDATE_FAILED',
+            message: balanceResult?.message || '退还余额失败，请重试'
+          }
+        });
+      }
+    }
 
     // 更新提现状态
     const { error: updateError } = await supabaseAdmin
@@ -1377,6 +2429,13 @@ router.put('/withdrawals/:id/process', async (req: Request, res: Response) => {
       .eq('id', id);
 
     if (updateError) {
+      // 如果状态更新失败，需要回滚余额（如果是拒绝操作）
+      if (status === 'rejected') {
+        await supabaseAdmin.rpc('decrease_user_balance', {
+          p_user_id: withdrawal.user_id,
+          p_amount: withdrawal.amount
+        });
+      }
       return res.status(500).json({
         success: false,
         error: {
@@ -1386,21 +2445,23 @@ router.put('/withdrawals/:id/process', async (req: Request, res: Response) => {
       });
     }
 
-    // 如果拒绝，退还余额
-    if (status === 'rejected') {
-      const { data: user } = await supabaseAdmin
-        .from('users')
-        .select('balance')
-        .eq('id', withdrawal.user_id)
-        .single();
-
-      if (user) {
-        await supabaseAdmin
-          .from('users')
-          .update({ balance: user.balance + withdrawal.amount })
-          .eq('id', withdrawal.user_id);
-      }
-    }
+    // 记录操作日志
+    const adminUser = (req as any).user;
+    await supabaseAdmin
+      .from('operation_logs')
+      .insert({
+        admin_id: adminUser?.id || 'unknown',
+        action: 'process_withdrawal',
+        target_type: 'withdrawal',
+        target_id: id,
+        details: {
+          status,
+          reason,
+          amount: withdrawal.amount,
+          user_id: withdrawal.user_id
+        },
+        created_at: now
+      });
 
     res.json({
       success: true,
@@ -1421,6 +2482,107 @@ router.put('/withdrawals/:id/process', async (req: Request, res: Response) => {
 // ===========================================
 // 分类管理
 // ===========================================
+
+/**
+ * GET /api/admin/withdrawal-settings
+ * 获取提现规则配置
+ */
+router.get('/withdrawal-settings', async (req: Request, res: Response) => {
+  try {
+    const { data: settings } = await supabaseAdmin
+      .from('settings')
+      .select('key, value')
+      .like('key', 'withdrawal_%');
+
+    const config: Record<string, any> = {
+      min_amount: 10,
+      max_amount: 50000,
+      max_daily_count: 5,
+      fee_rate: 0.003,
+      daily_limit: 100000,
+      audit_enabled: true
+    };
+
+    settings?.forEach(s => {
+      const key = s.key.replace('withdrawal_', '');
+      if (key === 'fee_rate') {
+        config[key] = parseFloat(s.value);
+      } else if (key === 'audit_enabled') {
+        config[key] = s.value === 'true';
+      } else if (key === 'daily_limit' || key === 'min_amount' || key === 'max_amount' || key === 'max_daily_count') {
+        config[key] = parseInt(s.value);
+      } else {
+        config[key] = s.value;
+      }
+    });
+
+    res.json({
+      success: true,
+      data: config
+    });
+  } catch (error) {
+    console.error('Get withdrawal settings error:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'SERVER_ERROR',
+        message: '服务器错误'
+      }
+    });
+  }
+});
+
+/**
+ * PUT /api/admin/withdrawal-settings
+ * 更新提现规则配置
+ */
+router.put('/withdrawal-settings', async (req: Request, res: Response) => {
+  try {
+    const { min_amount, max_amount, max_daily_count, fee_rate, daily_limit, audit_enabled } = req.body;
+
+    const settings = [
+      { key: 'withdrawal_min_amount', value: String(min_amount || 10) },
+      { key: 'withdrawal_max_amount', value: String(max_amount || 50000) },
+      { key: 'withdrawal_max_daily_count', value: String(max_daily_count || 5) },
+      { key: 'withdrawal_fee_rate', value: String(fee_rate || 0.003) },
+      { key: 'withdrawal_daily_limit', value: String(daily_limit || 100000) },
+      { key: 'withdrawal_audit_enabled', value: String(audit_enabled !== false) },
+    ];
+
+    for (const setting of settings) {
+      await supabaseAdmin
+        .from('settings')
+        .upsert({ key: setting.key, value: setting.value }, { onConflict: 'key' });
+    }
+
+    // 记录操作日志
+    const adminUser = (req as any).user;
+    await supabaseAdmin
+      .from('operation_logs')
+      .insert({
+        admin_id: adminUser?.id || 'unknown',
+        action: 'update_withdrawal_settings',
+        target_type: 'settings',
+        target_id: 'withdrawal',
+        details: { settings },
+        created_at: new Date().toISOString()
+      });
+
+    res.json({
+      success: true,
+      message: '配置已更新'
+    });
+  } catch (error) {
+    console.error('Update withdrawal settings error:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'SERVER_ERROR',
+        message: '服务器错误'
+      }
+    });
+  }
+});
 
 /**
  * GET /api/admin/categories
@@ -1693,6 +2855,17 @@ router.get('/cellar', async (req: Request, res: Response) => {
   try {
     const { page = 1, pageSize = 20, keyword, user_id } = req.query;
 
+    // UUID验证
+    if (user_id && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(user_id as string)) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'INVALID_USER_ID',
+          message: '无效的用户ID格式'
+        }
+      });
+    }
+
     let query = supabaseAdmin
       .from('cellar_items')
       .select('*, user:users(id, name, phone), product:products(id, name, images)', { count: 'exact' });
@@ -1701,7 +2874,8 @@ router.get('/cellar', async (req: Request, res: Response) => {
       query = query.eq('user_id', user_id);
     }
     if (keyword) {
-      query = query.or(`product_name.ilike.%${keyword}%`);
+      const sanitizedKeyword = sanitizeLikePattern(keyword as string);
+      query = query.ilike('product_name', `%${sanitizedKeyword}%`);
     }
 
     query = query.order('created_at', { ascending: false });
@@ -1725,24 +2899,25 @@ router.get('/cellar', async (req: Request, res: Response) => {
       });
     }
 
-    // 统计数据
-    const { data: stats } = await supabaseAdmin
-      .from('cellar_items')
-      .select('quantity, purchase_price');
+    // 使用数据库聚合函数获取统计数据（高效）
+    const { data: statsResult, error: statsError } = await supabaseAdmin.rpc('get_cellar_stats');
 
-    const totalQuantity = stats?.reduce((sum, item) => sum + item.quantity, 0) || 0;
-    const totalValue = stats?.reduce((sum, item) => sum + (item.purchase_price || 0) * item.quantity, 0) || 0;
+    let stats = {
+      total_quantity: 0,
+      total_value: 0,
+      distinct_products: 0
+    };
+
+    if (!statsError && statsResult) {
+      stats = statsResult;
+    }
 
     res.json({
       success: true,
       data: {
         list: items || [],
         total: count || 0,
-        stats: {
-          total_quantity: totalQuantity,
-          total_value: totalValue,
-          distinct_products: stats?.length || 0
-        },
+        stats,
         page: pageNum,
         pageSize: pageSizeNum
       }
@@ -1767,12 +2942,42 @@ router.delete('/cellar/:id', async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
 
-    const { error } = await supabaseAdmin
+    // UUID格式验证
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(id)) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'INVALID_ID',
+          message: '无效的ID格式'
+        }
+      });
+    }
+
+    // 先查询记录是否存在
+    const { data: existingItem, error: fetchError } = await supabaseAdmin
+      .from('cellar_items')
+      .select('id, product_name, user_id')
+      .eq('id', id)
+      .single();
+
+    if (fetchError || !existingItem) {
+      return res.status(404).json({
+        success: false,
+        error: {
+          code: 'ITEM_NOT_FOUND',
+          message: '酒窖记录不存在'
+        }
+      });
+    }
+
+    // 删除记录
+    const { error: deleteError } = await supabaseAdmin
       .from('cellar_items')
       .delete()
       .eq('id', id);
 
-    if (error) {
+    if (deleteError) {
       return res.status(500).json({
         success: false,
         error: {
@@ -1781,6 +2986,20 @@ router.delete('/cellar/:id', async (req: Request, res: Response) => {
         }
       });
     }
+
+    // 记录操作日志
+    await supabaseAdmin
+      .from('operation_logs')
+      .insert({
+        operator_id: req.user!.id,
+        type: 'cellar_item_delete',
+        detail: `删除酒窖记录: ${existingItem.product_name || '未知商品'}`,
+        target_id: id,
+        metadata: {
+          user_id: existingItem.user_id,
+          product_name: existingItem.product_name
+        }
+      });
 
     res.json({
       success: true,
@@ -1812,7 +3031,7 @@ router.get('/income-records', async (req: Request, res: Response) => {
 
     let query = supabaseAdmin
       .from('income_records')
-      .select('*', { count: 'exact' });
+      .select('*, user:users(id, name, phone, avatar)', { count: 'exact' });
 
     if (type) {
       query = query.eq('type', type);
@@ -1821,13 +3040,32 @@ router.get('/income-records', async (req: Request, res: Response) => {
       query = query.eq('status', status);
     }
     if (start_date) {
+      if (!isValidDateFormat(start_date as string)) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_DATE_FORMAT',
+            message: '日期格式应为 YYYY-MM-DD'
+          }
+        });
+      }
       query = query.gte('created_at', start_date);
     }
     if (end_date) {
+      if (!isValidDateFormat(end_date as string)) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_DATE_FORMAT',
+            message: '日期格式应为 YYYY-MM-DD'
+          }
+        });
+      }
       query = query.lte('created_at', end_date);
     }
     if (keyword) {
-      query = query.or(`user_id.ilike.%${keyword}%`);
+      const sanitizedKeyword = sanitizeLikePattern(keyword as string);
+      query = query.or(`user_id.ilike.%${sanitizedKeyword}%`);
     }
 
     query = query.order('created_at', { ascending: false });
@@ -1880,6 +3118,25 @@ router.get('/sales-leaderboard', async (req: Request, res: Response) => {
   try {
     const { period = 'month', limit = 50 } = req.query;
 
+    // 根据 period 计算日期范围
+    const now = new Date();
+    let startDate: Date | null = null;
+
+    switch (period as string) {
+      case 'week':
+        startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        break;
+      case 'month':
+        startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+        break;
+      case 'year':
+        startDate = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
+        break;
+      case 'all':
+      default:
+        startDate = null; // 不限制日期
+    }
+
     // 获取合伙人销售数据
     const { data: partners } = await supabaseAdmin
       .from('users')
@@ -1888,11 +3145,17 @@ router.get('/sales-leaderboard', async (req: Request, res: Response) => {
       .order('team_sales', { ascending: false })
       .limit(parseInt(limit as string) || 50);
 
-    // 获取每个合伙人的累计收益
-    const { data: earnings } = await supabaseAdmin
+    // 获取每个合伙人的累计收益（根据 period 过滤）
+    let earningsQuery = supabaseAdmin
       .from('income_records')
       .select('user_id, amount')
       .eq('status', 'completed');
+
+    if (startDate) {
+      earningsQuery = earningsQuery.gte('created_at', startDate.toISOString());
+    }
+
+    const { data: earnings } = await earningsQuery;
 
     const earningsMap: Record<string, number> = {};
     earnings?.forEach(e => {
@@ -2227,6 +3490,1396 @@ router.get('/operation-logs', async (req: Request, res: Response) => {
         code: 'SERVER_ERROR',
         message: '服务器错误'
       }
+    });
+  }
+});
+
+// ===========================================
+// 营销活动管理
+// ===========================================
+
+// 验证优惠券类型
+const VALID_COUPON_TYPES = ['discount', 'full_reduction'];
+const isValidCouponType = (type: string): boolean => {
+  return VALID_COUPON_TYPES.includes(type);
+};
+
+// 验证优惠券状态
+const VALID_COUPON_STATUS = ['distributing', 'paused', 'ended'];
+const isValidCouponStatus = (status: string): boolean => {
+  return VALID_COUPON_STATUS.includes(status);
+};
+
+// 验证活动状态
+const VALID_CAMPAIGN_STATUS = ['not_started', 'ongoing', 'ended'];
+const isValidCampaignStatus = (status: string): boolean => {
+  return VALID_CAMPAIGN_STATUS.includes(status);
+};
+
+/**
+ * 验证优惠券数据
+ */
+const validateCouponData = (data: any, isUpdate: boolean = false): { valid: boolean; error?: string } => {
+  const { name, type, discount_amount, min_amount, total_count, start_time, end_time } = data;
+
+  // 名称验证
+  if (!isUpdate || name !== undefined) {
+    if (!name || typeof name !== 'string' || name.trim().length === 0) {
+      return { valid: false, error: '优惠券名称不能为空' };
+    }
+    if (name.length > 100) {
+      return { valid: false, error: '优惠券名称不能超过 100 个字符' };
+    }
+  }
+
+  // 类型验证
+  if (!isUpdate || type !== undefined) {
+    if (!type || !isValidCouponType(type)) {
+      return { valid: false, error: '优惠券类型无效' };
+    }
+  }
+
+  // 面额验证
+  if (!isUpdate || discount_amount !== undefined) {
+    if (discount_amount === undefined || discount_amount === null) {
+      if (!isUpdate) return { valid: false, error: '优惠券面额不能为空' };
+    } else {
+      const amount = Number(discount_amount);
+      if (isNaN(amount) || amount <= 0) {
+        return { valid: false, error: '优惠券面额必须大于 0' };
+      }
+      if (amount > 99999) {
+        return { valid: false, error: '优惠券面额超出范围' };
+      }
+    }
+  }
+
+  // 使用门槛验证
+  if (min_amount !== undefined) {
+    const min = Number(min_amount);
+    if (isNaN(min) || min < 0) {
+      return { valid: false, error: '使用门槛必须为非负数' };
+    }
+  }
+
+  // 总量验证
+  if (!isUpdate || total_count !== undefined) {
+    if (total_count === undefined || total_count === null) {
+      if (!isUpdate) return { valid: false, error: '发放总量不能为空' };
+    } else {
+      const count = Number(total_count);
+      if (isNaN(count) || !Number.isInteger(count) || count <= 0) {
+        return { valid: false, error: '发放总量必须为正整数' };
+      }
+      if (count > 99999999) {
+        return { valid: false, error: '发放总量超出范围' };
+      }
+    }
+  }
+
+  // 时间验证
+  if (!isUpdate || start_time !== undefined || end_time !== undefined) {
+    if (!isUpdate) {
+      if (!start_time || !end_time) {
+        return { valid: false, error: '活动时间不能为空' };
+      }
+    }
+    if (start_time && end_time) {
+      const start = new Date(start_time);
+      const end = new Date(end_time);
+      if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+        return { valid: false, error: '时间格式无效' };
+      }
+      if (start >= end) {
+        return { valid: false, error: '开始时间必须早于结束时间' };
+      }
+    }
+  }
+
+  return { valid: true };
+};
+
+/**
+ * 验证秒杀活动数据
+ */
+const validateFlashSaleData = (data: any, isUpdate: boolean = false): { valid: boolean; error?: string } => {
+  const { product_id, flash_price, stock, start_time, end_time, limit_per_user } = data;
+
+  // 商品验证
+  if (!isUpdate || product_id !== undefined) {
+    if (!product_id) {
+      if (!isUpdate) return { valid: false, error: '请选择秒杀商品' };
+    }
+  }
+
+  // 秒杀价验证
+  if (!isUpdate || flash_price !== undefined) {
+    if (flash_price === undefined || flash_price === null) {
+      if (!isUpdate) return { valid: false, error: '秒杀价格不能为空' };
+    } else {
+      const price = Number(flash_price);
+      if (isNaN(price) || price <= 0) {
+        return { valid: false, error: '秒杀价格必须大于 0' };
+      }
+    }
+  }
+
+  // 库存验证
+  if (!isUpdate || stock !== undefined) {
+    if (stock === undefined || stock === null) {
+      if (!isUpdate) return { valid: false, error: '秒杀库存不能为空' };
+    } else {
+      const stockNum = Number(stock);
+      if (isNaN(stockNum) || !Number.isInteger(stockNum) || stockNum <= 0) {
+        return { valid: false, error: '秒杀库存必须为正整数' };
+      }
+      if (stockNum > 999999) {
+        return { valid: false, error: '秒杀库存超出范围' };
+      }
+    }
+  }
+
+  // 时间验证
+  if (!isUpdate || start_time !== undefined || end_time !== undefined) {
+    if (!isUpdate && (!start_time || !end_time)) {
+      return { valid: false, error: '活动时间不能为空' };
+    }
+    if (start_time && end_time) {
+      const start = new Date(start_time);
+      const end = new Date(end_time);
+      if (start >= end) {
+        return { valid: false, error: '开始时间必须早于结束时间' };
+      }
+    }
+  }
+
+  // 每人限购验证
+  if (limit_per_user !== undefined) {
+    const limit = Number(limit_per_user);
+    if (isNaN(limit) || !Number.isInteger(limit) || limit < 0) {
+      return { valid: false, error: '每人限购必须为非负整数' };
+    }
+  }
+
+  return { valid: true };
+};
+
+/**
+ * 验证团购活动数据
+ */
+const validateGroupBuyData = (data: any, isUpdate: boolean = false): { valid: boolean; error?: string } => {
+  const { product_id, group_price, min_quantity, start_time, end_time } = data;
+
+  // 商品验证
+  if (!isUpdate || product_id !== undefined) {
+    if (!product_id) {
+      if (!isUpdate) return { valid: false, error: '请选择团购商品' };
+    }
+  }
+
+  // 团购价验证
+  if (!isUpdate || group_price !== undefined) {
+    if (group_price === undefined || group_price === null) {
+      if (!isUpdate) return { valid: false, error: '团购价格不能为空' };
+    } else {
+      const price = Number(group_price);
+      if (isNaN(price) || price <= 0) {
+        return { valid: false, error: '团购价格必须大于 0' };
+      }
+    }
+  }
+
+  // 成团人数验证
+  if (!isUpdate || min_quantity !== undefined) {
+    if (min_quantity === undefined || min_quantity === null) {
+      if (!isUpdate) return { valid: false, error: '成团人数不能为空' };
+    } else {
+      const qty = Number(min_quantity);
+      if (isNaN(qty) || !Number.isInteger(qty) || qty < 2) {
+        return { valid: false, error: '成团人数至少为 2 人' };
+      }
+      if (qty > 999) {
+        return { valid: false, error: '成团人数超出范围' };
+      }
+    }
+  }
+
+  // 时间验证
+  if (!isUpdate || start_time !== undefined || end_time !== undefined) {
+    if (!isUpdate && (!start_time || !end_time)) {
+      return { valid: false, error: '活动时间不能为空' };
+    }
+    if (start_time && end_time) {
+      const start = new Date(start_time);
+      const end = new Date(end_time);
+      if (start >= end) {
+        return { valid: false, error: '开始时间必须早于结束时间' };
+      }
+    }
+  }
+
+  return { valid: true };
+};
+
+// ===========================================
+// 优惠券管理
+// ===========================================
+
+/**
+ * GET /api/admin/coupons
+ * 优惠券列表（管理后台）
+ */
+router.get('/coupons', async (req: Request, res: Response) => {
+  try {
+    const { page = 1, pageSize = 20, status, keyword } = req.query;
+
+    let query = supabaseAdmin
+      .from('coupons')
+      .select('*', { count: 'exact' });
+
+    if (status && isValidCouponStatus(status as string)) {
+      query = query.eq('status', status);
+    }
+    if (keyword) {
+      query = query.ilike('name', `%${sanitizeLikePattern(keyword as string)}%`);
+    }
+
+    query = query.order('created_at', { ascending: false });
+
+    // 分页
+    const pageNum = Math.max(1, parseInt(page as string) || 1);
+    const pageSizeNum = Math.min(100, Math.max(1, parseInt(pageSize as string) || 20));
+    const offset = (pageNum - 1) * pageSizeNum;
+
+    query = query.range(offset, offset + pageSizeNum - 1);
+
+    const { data: coupons, error, count } = await query;
+
+    if (error) {
+      return res.status(500).json({
+        success: false,
+        error: { code: 'QUERY_ERROR', message: '查询失败' }
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        list: coupons || [],
+        total: count || 0,
+        page: pageNum,
+        pageSize: pageSizeNum
+      }
+    });
+  } catch (error) {
+    console.error('Get admin coupons error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * POST /api/admin/coupons
+ * 创建优惠券
+ */
+router.post('/coupons', async (req: Request, res: Response) => {
+  try {
+    const validation = validateCouponData(req.body);
+    if (!validation.valid) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'INVALID_PARAMS', message: validation.error }
+      });
+    }
+
+    const { name, type, discount_amount, min_amount, total_count, start_time, end_time, limit_per_user, description } = req.body;
+
+    const { data: coupon, error } = await supabaseAdmin
+      .from('coupons')
+      .insert({
+        name: escapeHtml(name.trim()),
+        type,
+        discount_amount: Number(discount_amount),
+        min_amount: Number(min_amount) || 0,
+        total_count: Number(total_count),
+        used_count: 0,
+        start_time,
+        end_time,
+        limit_per_user: Number(limit_per_user) || 1,
+        description: description ? escapeHtml(description) : null,
+        status: 'distributing'
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Create coupon error:', error);
+      return res.status(500).json({
+        success: false,
+        error: { code: 'INSERT_ERROR', message: '创建失败: ' + error.message }
+      });
+    }
+
+    // 记录操作日志
+    await supabaseAdmin
+      .from('operation_logs')
+      .insert({
+        operator_id: req.user!.id,
+        type: 'coupon_create',
+        detail: `创建优惠券: ${name}`,
+        target_id: coupon.id
+      });
+
+    res.json({
+      success: true,
+      data: coupon,
+      message: '优惠券创建成功'
+    });
+  } catch (error) {
+    console.error('Create coupon error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * GET /api/admin/coupons/:id
+ * 优惠券详情
+ */
+router.get('/coupons/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const { data: coupon, error } = await supabaseAdmin
+      .from('coupons')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (error || !coupon) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'COUPON_NOT_FOUND', message: '优惠券不存在' }
+      });
+    }
+
+    res.json({
+      success: true,
+      data: coupon
+    });
+  } catch (error) {
+    console.error('Get coupon detail error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * PUT /api/admin/coupons/:id
+ * 更新优惠券
+ */
+router.put('/coupons/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    // 检查优惠券是否存在
+    const { data: existingCoupon, error: fetchError } = await supabaseAdmin
+      .from('coupons')
+      .select('id, name, status')
+      .eq('id', id)
+      .single();
+
+    if (fetchError || !existingCoupon) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'COUPON_NOT_FOUND', message: '优惠券不存在' }
+      });
+    }
+
+    // 验证输入
+    const validation = validateCouponData(req.body, true);
+    if (!validation.valid) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'INVALID_PARAMS', message: validation.error }
+      });
+    }
+
+    // 构建更新数据
+    const updateData: any = {};
+    const { name, type, discount_amount, min_amount, total_count, start_time, end_time, limit_per_user, description, status } = req.body;
+
+    if (name !== undefined) updateData.name = escapeHtml(name.trim());
+    if (type !== undefined && isValidCouponType(type)) updateData.type = type;
+    if (discount_amount !== undefined) updateData.discount_amount = Number(discount_amount);
+    if (min_amount !== undefined) updateData.min_amount = Number(min_amount);
+    if (total_count !== undefined) updateData.total_count = Number(total_count);
+    if (start_time !== undefined) updateData.start_time = start_time;
+    if (end_time !== undefined) updateData.end_time = end_time;
+    if (limit_per_user !== undefined) updateData.limit_per_user = Number(limit_per_user);
+    if (description !== undefined) updateData.description = description ? escapeHtml(description) : null;
+    if (status !== undefined && isValidCouponStatus(status)) updateData.status = status;
+
+    const { error } = await supabaseAdmin
+      .from('coupons')
+      .update(updateData)
+      .eq('id', id);
+
+    if (error) {
+      return res.status(500).json({
+        success: false,
+        error: { code: 'UPDATE_ERROR', message: '更新失败' }
+      });
+    }
+
+    // 记录操作日志
+    await supabaseAdmin
+      .from('operation_logs')
+      .insert({
+        operator_id: req.user!.id,
+        type: 'coupon_update',
+        detail: `更新优惠券: ${existingCoupon.name}`,
+        target_id: id
+      });
+
+    res.json({
+      success: true,
+      message: '优惠券更新成功'
+    });
+  } catch (error) {
+    console.error('Update coupon error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * DELETE /api/admin/coupons/:id
+ * 删除优惠券
+ */
+router.delete('/coupons/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    // 检查优惠券是否存在
+    const { data: existingCoupon, error: fetchError } = await supabaseAdmin
+      .from('coupons')
+      .select('id, name, used_count')
+      .eq('id', id)
+      .single();
+
+    if (fetchError || !existingCoupon) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'COUPON_NOT_FOUND', message: '优惠券不存在' }
+      });
+    }
+
+    // 检查是否已被领取
+    if (existingCoupon.used_count > 0) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'COUPON_USED', message: '优惠券已被领取，无法删除' }
+      });
+    }
+
+    const { error } = await supabaseAdmin
+      .from('coupons')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      return res.status(500).json({
+        success: false,
+        error: { code: 'DELETE_ERROR', message: '删除失败' }
+      });
+    }
+
+    // 记录操作日志
+    await supabaseAdmin
+      .from('operation_logs')
+      .insert({
+        operator_id: req.user!.id,
+        type: 'coupon_delete',
+        detail: `删除优惠券: ${existingCoupon.name}`,
+        target_id: id
+      });
+
+    res.json({
+      success: true,
+      message: '优惠券已删除'
+    });
+  } catch (error) {
+    console.error('Delete coupon error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * GET /api/admin/coupons/:id/records
+ * 优惠券发放记录
+ */
+router.get('/coupons/:id/records', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { page = 1, pageSize = 20, status } = req.query;
+
+    // 检查优惠券是否存在
+    const { data: coupon, error: couponError } = await supabaseAdmin
+      .from('coupons')
+      .select('id, name')
+      .eq('id', id)
+      .single();
+
+    if (couponError || !coupon) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'COUPON_NOT_FOUND', message: '优惠券不存在' }
+      });
+    }
+
+    let query = supabaseAdmin
+      .from('user_coupons')
+      .select('*, user:users(id, name, phone, avatar)', { count: 'exact' })
+      .eq('coupon_id', id);
+
+    if (status) {
+      query = query.eq('status', status);
+    }
+
+    query = query.order('created_at', { ascending: false });
+
+    // 分页
+    const pageNum = Math.max(1, parseInt(page as string) || 1);
+    const pageSizeNum = Math.min(100, Math.max(1, parseInt(pageSize as string) || 20));
+    const offset = (pageNum - 1) * pageSizeNum;
+
+    query = query.range(offset, offset + pageSizeNum - 1);
+
+    const { data: records, error, count } = await query;
+
+    if (error) {
+      return res.status(500).json({
+        success: false,
+        error: { code: 'QUERY_ERROR', message: '查询失败' }
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        coupon,
+        list: records || [],
+        total: count || 0,
+        page: pageNum,
+        pageSize: pageSizeNum
+      }
+    });
+  } catch (error) {
+    console.error('Get coupon records error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+// ===========================================
+// 秒杀活动管理
+// ===========================================
+
+/**
+ * GET /api/admin/flash-sales
+ * 秒杀活动列表（管理后台）
+ */
+router.get('/flash-sales', async (req: Request, res: Response) => {
+  try {
+    const { page = 1, pageSize = 20, status, keyword } = req.query;
+
+    let query = supabaseAdmin
+      .from('flash_sales')
+      .select(`
+        *,
+        product:products(id, name, images, original_price, stock)
+      `, { count: 'exact' });
+
+    if (status && isValidCampaignStatus(status as string)) {
+      query = query.eq('status', status);
+    }
+
+    query = query.order('start_time', { ascending: true });
+
+    // 分页
+    const pageNum = Math.max(1, parseInt(page as string) || 1);
+    const pageSizeNum = Math.min(100, Math.max(1, parseInt(pageSize as string) || 20));
+    const offset = (pageNum - 1) * pageSizeNum;
+
+    query = query.range(offset, offset + pageSizeNum - 1);
+
+    const { data: flashSales, error, count } = await query;
+
+    if (error) {
+      return res.status(500).json({
+        success: false,
+        error: { code: 'QUERY_ERROR', message: '查询失败' }
+      });
+    }
+
+    // 前端关键词搜索（商品名称）
+    let filteredList = flashSales || [];
+    if (keyword) {
+      filteredList = filteredList.filter(item =>
+        item.product?.name?.toLowerCase().includes((keyword as string).toLowerCase())
+      );
+    }
+
+    res.json({
+      success: true,
+      data: {
+        list: filteredList,
+        total: count || 0,
+        page: pageNum,
+        pageSize: pageSizeNum
+      }
+    });
+  } catch (error) {
+    console.error('Get admin flash sales error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * POST /api/admin/flash-sales
+ * 创建秒杀活动
+ */
+router.post('/flash-sales', async (req: Request, res: Response) => {
+  try {
+    const validation = validateFlashSaleData(req.body);
+    if (!validation.valid) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'INVALID_PARAMS', message: validation.error }
+      });
+    }
+
+    const { product_id, flash_price, stock, start_time, end_time, limit_per_user } = req.body;
+
+    // 检查商品是否存在
+    const { data: product, error: productError } = await supabaseAdmin
+      .from('products')
+      .select('id, name, stock, price')
+      .eq('id', product_id)
+      .single();
+
+    if (productError || !product) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'PRODUCT_NOT_FOUND', message: '商品不存在' }
+      });
+    }
+
+    // 检查秒杀库存是否超过商品库存
+    if (Number(stock) > product.stock) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'STOCK_EXCEED', message: '秒杀库存不能超过商品库存' }
+      });
+    }
+
+    // 检查秒杀价是否低于原价
+    if (Number(flash_price) >= product.price) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'PRICE_INVALID', message: '秒杀价应低于商品原价' }
+      });
+    }
+
+    // 确定活动状态
+    const now = new Date();
+    const startTime = new Date(start_time);
+    let status = 'not_started';
+    if (startTime <= now) {
+      status = 'ongoing';
+    }
+
+    const { data: flashSale, error } = await supabaseAdmin
+      .from('flash_sales')
+      .insert({
+        product_id,
+        flash_price: Number(flash_price),
+        stock: Number(stock),
+        sold_count: 0,
+        start_time,
+        end_time,
+        limit_per_user: Number(limit_per_user) || 0,
+        status
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Create flash sale error:', error);
+      return res.status(500).json({
+        success: false,
+        error: { code: 'INSERT_ERROR', message: '创建失败: ' + error.message }
+      });
+    }
+
+    // 记录操作日志
+    await supabaseAdmin
+      .from('operation_logs')
+      .insert({
+        operator_id: req.user!.id,
+        type: 'flash_sale_create',
+        detail: `创建秒杀活动: ${product.name}`,
+        target_id: flashSale.id
+      });
+
+    res.json({
+      success: true,
+      data: flashSale,
+      message: '秒杀活动创建成功'
+    });
+  } catch (error) {
+    console.error('Create flash sale error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * GET /api/admin/flash-sales/:id
+ * 秒杀活动详情
+ */
+router.get('/flash-sales/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const { data: flashSale, error } = await supabaseAdmin
+      .from('flash_sales')
+      .select(`
+        *,
+        product:products(id, name, images, original_price, stock, price)
+      `)
+      .eq('id', id)
+      .single();
+
+    if (error || !flashSale) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'FLASH_SALE_NOT_FOUND', message: '秒杀活动不存在' }
+      });
+    }
+
+    res.json({
+      success: true,
+      data: flashSale
+    });
+  } catch (error) {
+    console.error('Get flash sale detail error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * PUT /api/admin/flash-sales/:id
+ * 更新秒杀活动
+ */
+router.put('/flash-sales/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    // 检查活动是否存在
+    const { data: existingFlashSale, error: fetchError } = await supabaseAdmin
+      .from('flash_sales')
+      .select('id, product_id, sold_count, status')
+      .eq('id', id)
+      .single();
+
+    if (fetchError || !existingFlashSale) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'FLASH_SALE_NOT_FOUND', message: '秒杀活动不存在' }
+      });
+    }
+
+    // 已结束的活动不能修改
+    if (existingFlashSale.status === 'ended') {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'FLASH_SALE_ENDED', message: '活动已结束，无法修改' }
+      });
+    }
+
+    // 验证输入
+    const validation = validateFlashSaleData(req.body, true);
+    if (!validation.valid) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'INVALID_PARAMS', message: validation.error }
+      });
+    }
+
+    // 构建更新数据
+    const updateData: any = {};
+    const { flash_price, stock, start_time, end_time, limit_per_user, status } = req.body;
+
+    // 已售出的活动不能修改库存低于已售数量
+    if (stock !== undefined) {
+      const newStock = Number(stock);
+      if (newStock < existingFlashSale.sold_count) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'STOCK_INSUFFICIENT', message: '库存不能低于已售数量' }
+        });
+      }
+      updateData.stock = newStock;
+    }
+
+    if (flash_price !== undefined) updateData.flash_price = Number(flash_price);
+    if (start_time !== undefined) updateData.start_time = start_time;
+    if (end_time !== undefined) updateData.end_time = end_time;
+    if (limit_per_user !== undefined) updateData.limit_per_user = Number(limit_per_user);
+    if (status !== undefined && isValidCampaignStatus(status)) updateData.status = status;
+
+    const { error } = await supabaseAdmin
+      .from('flash_sales')
+      .update(updateData)
+      .eq('id', id);
+
+    if (error) {
+      return res.status(500).json({
+        success: false,
+        error: { code: 'UPDATE_ERROR', message: '更新失败' }
+      });
+    }
+
+    // 记录操作日志
+    await supabaseAdmin
+      .from('operation_logs')
+      .insert({
+        operator_id: req.user!.id,
+        type: 'flash_sale_update',
+        detail: `更新秒杀活动`,
+        target_id: id
+      });
+
+    res.json({
+      success: true,
+      message: '秒杀活动更新成功'
+    });
+  } catch (error) {
+    console.error('Update flash sale error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * DELETE /api/admin/flash-sales/:id
+ * 删除秒杀活动
+ */
+router.delete('/flash-sales/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    // 检查活动是否存在
+    const { data: existingFlashSale, error: fetchError } = await supabaseAdmin
+      .from('flash_sales')
+      .select('id, sold_count, status')
+      .eq('id', id)
+      .single();
+
+    if (fetchError || !existingFlashSale) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'FLASH_SALE_NOT_FOUND', message: '秒杀活动不存在' }
+      });
+    }
+
+    // 已售出商品的活动不能删除
+    if (existingFlashSale.sold_count > 0) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'FLASH_SALE_HAS_ORDERS', message: '活动已有订单，无法删除' }
+      });
+    }
+
+    const { error } = await supabaseAdmin
+      .from('flash_sales')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      return res.status(500).json({
+        success: false,
+        error: { code: 'DELETE_ERROR', message: '删除失败' }
+      });
+    }
+
+    // 记录操作日志
+    await supabaseAdmin
+      .from('operation_logs')
+      .insert({
+        operator_id: req.user!.id,
+        type: 'flash_sale_delete',
+        detail: `删除秒杀活动`,
+        target_id: id
+      });
+
+    res.json({
+      success: true,
+      message: '秒杀活动已删除'
+    });
+  } catch (error) {
+    console.error('Delete flash sale error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+// ===========================================
+// 团购活动管理
+// ===========================================
+
+/**
+ * GET /api/admin/group-buys
+ * 团购活动列表（管理后台）
+ */
+router.get('/group-buys', async (req: Request, res: Response) => {
+  try {
+    const { page = 1, pageSize = 20, status, keyword } = req.query;
+
+    let query = supabaseAdmin
+      .from('group_buys')
+      .select(`
+        *,
+        product:products(id, name, images, original_price)
+      `, { count: 'exact' });
+
+    if (status && isValidCampaignStatus(status as string)) {
+      query = query.eq('status', status);
+    }
+
+    query = query.order('created_at', { ascending: false });
+
+    // 分页
+    const pageNum = Math.max(1, parseInt(page as string) || 1);
+    const pageSizeNum = Math.min(100, Math.max(1, parseInt(pageSize as string) || 20));
+    const offset = (pageNum - 1) * pageSizeNum;
+
+    query = query.range(offset, offset + pageSizeNum - 1);
+
+    const { data: groupBuys, error, count } = await query;
+
+    if (error) {
+      return res.status(500).json({
+        success: false,
+        error: { code: 'QUERY_ERROR', message: '查询失败' }
+      });
+    }
+
+    // 前端关键词搜索（商品名称）
+    let filteredList = groupBuys || [];
+    if (keyword) {
+      filteredList = filteredList.filter(item =>
+        item.product?.name?.toLowerCase().includes((keyword as string).toLowerCase())
+      );
+    }
+
+    res.json({
+      success: true,
+      data: {
+        list: filteredList,
+        total: count || 0,
+        page: pageNum,
+        pageSize: pageSizeNum
+      }
+    });
+  } catch (error) {
+    console.error('Get admin group buys error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * POST /api/admin/group-buys
+ * 创建团购活动
+ */
+router.post('/group-buys', async (req: Request, res: Response) => {
+  try {
+    const validation = validateGroupBuyData(req.body);
+    if (!validation.valid) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'INVALID_PARAMS', message: validation.error }
+      });
+    }
+
+    const { product_id, group_price, min_quantity, start_time, end_time } = req.body;
+
+    // 检查商品是否存在
+    const { data: product, error: productError } = await supabaseAdmin
+      .from('products')
+      .select('id, name, price')
+      .eq('id', product_id)
+      .single();
+
+    if (productError || !product) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'PRODUCT_NOT_FOUND', message: '商品不存在' }
+      });
+    }
+
+    // 检查团购价是否低于原价
+    if (Number(group_price) >= product.price) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'PRICE_INVALID', message: '团购价应低于商品原价' }
+      });
+    }
+
+    // 确定活动状态
+    const now = new Date();
+    const startTime = new Date(start_time);
+    let status = 'not_started';
+    if (startTime <= now) {
+      status = 'ongoing';
+    }
+
+    const { data: groupBuy, error } = await supabaseAdmin
+      .from('group_buys')
+      .insert({
+        product_id,
+        group_price: Number(group_price),
+        min_quantity: Number(min_quantity),
+        current_quantity: 0,
+        start_time,
+        end_time,
+        status
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Create group buy error:', error);
+      return res.status(500).json({
+        success: false,
+        error: { code: 'INSERT_ERROR', message: '创建失败: ' + error.message }
+      });
+    }
+
+    // 记录操作日志
+    await supabaseAdmin
+      .from('operation_logs')
+      .insert({
+        operator_id: req.user!.id,
+        type: 'group_buy_create',
+        detail: `创建团购活动: ${product.name}`,
+        target_id: groupBuy.id
+      });
+
+    res.json({
+      success: true,
+      data: groupBuy,
+      message: '团购活动创建成功'
+    });
+  } catch (error) {
+    console.error('Create group buy error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * GET /api/admin/group-buys/:id
+ * 团购活动详情
+ */
+router.get('/group-buys/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const { data: groupBuy, error } = await supabaseAdmin
+      .from('group_buys')
+      .select(`
+        *,
+        product:products(id, name, images, original_price, price)
+      `)
+      .eq('id', id)
+      .single();
+
+    if (error || !groupBuy) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'GROUP_BUY_NOT_FOUND', message: '团购活动不存在' }
+      });
+    }
+
+    res.json({
+      success: true,
+      data: groupBuy
+    });
+  } catch (error) {
+    console.error('Get group buy detail error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * PUT /api/admin/group-buys/:id
+ * 更新团购活动
+ */
+router.put('/group-buys/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    // 检查活动是否存在
+    const { data: existingGroupBuy, error: fetchError } = await supabaseAdmin
+      .from('group_buys')
+      .select('id, current_quantity, status')
+      .eq('id', id)
+      .single();
+
+    if (fetchError || !existingGroupBuy) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'GROUP_BUY_NOT_FOUND', message: '团购活动不存在' }
+      });
+    }
+
+    // 已结束的活动不能修改
+    if (existingGroupBuy.status === 'ended') {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'GROUP_BUY_ENDED', message: '活动已结束，无法修改' }
+      });
+    }
+
+    // 验证输入
+    const validation = validateGroupBuyData(req.body, true);
+    if (!validation.valid) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'INVALID_PARAMS', message: validation.error }
+      });
+    }
+
+    // 构建更新数据
+    const updateData: any = {};
+    const { group_price, min_quantity, start_time, end_time, status } = req.body;
+
+    if (group_price !== undefined) updateData.group_price = Number(group_price);
+    if (min_quantity !== undefined) updateData.min_quantity = Number(min_quantity);
+    if (start_time !== undefined) updateData.start_time = start_time;
+    if (end_time !== undefined) updateData.end_time = end_time;
+    if (status !== undefined && isValidCampaignStatus(status)) updateData.status = status;
+
+    const { error } = await supabaseAdmin
+      .from('group_buys')
+      .update(updateData)
+      .eq('id', id);
+
+    if (error) {
+      return res.status(500).json({
+        success: false,
+        error: { code: 'UPDATE_ERROR', message: '更新失败' }
+      });
+    }
+
+    // 记录操作日志
+    await supabaseAdmin
+      .from('operation_logs')
+      .insert({
+        operator_id: req.user!.id,
+        type: 'group_buy_update',
+        detail: `更新团购活动`,
+        target_id: id
+      });
+
+    res.json({
+      success: true,
+      message: '团购活动更新成功'
+    });
+  } catch (error) {
+    console.error('Update group buy error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * DELETE /api/admin/group-buys/:id
+ * 删除团购活动
+ */
+router.delete('/group-buys/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    // 检查活动是否存在
+    const { data: existingGroupBuy, error: fetchError } = await supabaseAdmin
+      .from('group_buys')
+      .select('id, current_quantity, status')
+      .eq('id', id)
+      .single();
+
+    if (fetchError || !existingGroupBuy) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'GROUP_BUY_NOT_FOUND', message: '团购活动不存在' }
+      });
+    }
+
+    // 已有参团的活动不能删除
+    if (existingGroupBuy.current_quantity > 0) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'GROUP_BUY_HAS_PARTICIPANTS', message: '活动已有参与者，无法删除' }
+      });
+    }
+
+    const { error } = await supabaseAdmin
+      .from('group_buys')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      return res.status(500).json({
+        success: false,
+        error: { code: 'DELETE_ERROR', message: '删除失败' }
+      });
+    }
+
+    // 记录操作日志
+    await supabaseAdmin
+      .from('operation_logs')
+      .insert({
+        operator_id: req.user!.id,
+        type: 'group_buy_delete',
+        detail: `删除团购活动`,
+        target_id: id
+      });
+
+    res.json({
+      success: true,
+      message: '团购活动已删除'
+    });
+  } catch (error) {
+    console.error('Delete group buy error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * GET /api/admin/group-buys/:id/records
+ * 团购参团记录
+ */
+router.get('/group-buys/:id/records', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { page = 1, pageSize = 20 } = req.query;
+
+    // 检查团购活动是否存在
+    const { data: groupBuy, error: groupBuyError } = await supabaseAdmin
+      .from('group_buys')
+      .select('id, product_id, min_quantity, current_quantity, status')
+      .eq('id', id)
+      .single();
+
+    if (groupBuyError || !groupBuy) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'GROUP_BUY_NOT_FOUND', message: '团购活动不存在' }
+      });
+    }
+
+    // 由于没有专门的团购参团表，从订单中查找该团购的订单
+    // 这里需要根据实际业务逻辑调整
+    // 假设订单有 group_buy_id 字段
+    const { data: orders, error, count } = await supabaseAdmin
+      .from('orders')
+      .select(`
+        id,
+        order_no,
+        user_id,
+        paid_amount,
+        created_at,
+        status,
+        user:users(id, name, phone, avatar)
+      `, { count: 'exact' })
+      .eq('group_buy_id', id)
+      .order('created_at', { ascending: false });
+
+    // 分页
+    const pageNum = Math.max(1, parseInt(page as string) || 1);
+    const pageSizeNum = Math.min(100, Math.max(1, parseInt(pageSize as string) || 20));
+
+    if (error) {
+      // 如果 group_buy_id 字段不存在，返回空列表
+      console.error('Get group buy records error:', error);
+      return res.json({
+        success: true,
+        data: {
+          groupBuy,
+          list: [],
+          total: 0,
+          page: pageNum,
+          pageSize: pageSizeNum
+        }
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        groupBuy,
+        list: orders || [],
+        total: count || 0,
+        page: pageNum,
+        pageSize: pageSizeNum
+      }
+    });
+  } catch (error) {
+    console.error('Get group buy records error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
     });
   }
 });
