@@ -3,6 +3,8 @@
  * 统一处理请求和响应
  */
 
+import type { RankReward, PeriodWeights, DisplaySettings } from '../pages/admin/AdminLeaderboard';
+
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
 
 // 获取存储的 token
@@ -392,8 +394,14 @@ export const adminApi = {
     return request(`/admin/orders?${query.toString()}`);
   },
 
+  getOrder: (id: string) =>
+    request(`/admin/orders/${id}`),
+
   shipOrder: (id: string, data: { logistics_company: string; logistics_no: string }) =>
     request(`/admin/orders/${id}/ship`, { method: 'PUT', body: data }),
+
+  cancelOrder: (id: string) =>
+    request(`/admin/orders/${id}/cancel`, { method: 'PUT' }),
 
   // 用户管理
   getUsers: (params?: any) => {
@@ -411,6 +419,42 @@ export const adminApi = {
   updateUserStatus: (id: string, status: 'active' | 'frozen') =>
     request(`/admin/users/${id}/status`, { method: 'PUT', body: { status } }),
 
+  getUser: (id: string) =>
+    request(`/admin/users/${id}`),
+
+  getUserOrders: (id: string, params?: { page?: number; pageSize?: number; status?: string }) => {
+    const query = new URLSearchParams();
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined) {
+          query.append(key, String(value));
+        }
+      });
+    }
+    return request(`/admin/users/${id}/orders?${query.toString()}`);
+  },
+
+  getUserIncome: (id: string, params?: { page?: number; pageSize?: number; type?: string }) => {
+    const query = new URLSearchParams();
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined) {
+          query.append(key, String(value));
+        }
+      });
+    }
+    return request(`/admin/users/${id}/income?${query.toString()}`);
+  },
+
+  getUserAddresses: (id: string) =>
+    request(`/admin/users/${id}/addresses`),
+
+  getUserCellar: (id: string) =>
+    request(`/admin/users/${id}/cellar`),
+
+  getUserTeam: (id: string) =>
+    request(`/admin/users/${id}/team`),
+
   // 合伙人管理
   getPartners: (params?: any) => {
     const query = new URLSearchParams();
@@ -422,6 +466,33 @@ export const adminApi = {
       });
     }
     return request(`/admin/partners?${query.toString()}`);
+  },
+
+  getPartner: (id: string) =>
+    request(`/admin/partners/${id}`),
+
+  getPartnerTeam: (id: string, params?: { page?: number; pageSize?: number; type?: string }) => {
+    const query = new URLSearchParams();
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined) {
+          query.append(key, String(value));
+        }
+      });
+    }
+    return request(`/admin/partners/${id}/team?${query.toString()}`);
+  },
+
+  getPartnerIncome: (id: string, params?: { page?: number; pageSize?: number; type?: string }) => {
+    const query = new URLSearchParams();
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined) {
+          query.append(key, String(value));
+        }
+      });
+    }
+    return request(`/admin/partners/${id}/income?${query.toString()}`);
   },
 
   getPartnerApplications: (params?: any) => {
@@ -454,6 +525,18 @@ export const adminApi = {
 
   processWithdrawal: (id: string, status: 'success' | 'rejected', reason?: string) =>
     request(`/admin/withdrawals/${id}/process`, { method: 'PUT', body: { status, reason } }),
+
+  getWithdrawalSettings: () =>
+    request('/admin/withdrawal-settings'),
+
+  updateWithdrawalSettings: (settings: {
+    min_amount?: number;
+    max_amount?: number;
+    max_daily_count?: number;
+    fee_rate?: number;
+    daily_limit?: number;
+  }) =>
+    request('/admin/withdrawal-settings', { method: 'PUT', body: settings }),
 
   // 分类管理
   getCategories: () =>
@@ -539,10 +622,10 @@ export const adminApi = {
     request('/admin/leaderboard-settings'),
 
   updateLeaderboardSettings: (data: {
-    sales_rewards?: any[];
-    income_rewards?: any[];
-    period_weights?: any;
-    display_settings?: any;
+    sales_rewards?: RankReward[];
+    income_rewards?: RankReward[];
+    period_weights?: PeriodWeights;
+    display_settings?: DisplaySettings;
   }) =>
     request('/admin/leaderboard-settings', { method: 'PUT', body: data }),
 
@@ -564,6 +647,156 @@ export const adminApi = {
       });
     }
     return request(`/admin/operation-logs?${query.toString()}`);
+  },
+
+  // ===========================================
+  // 营销活动管理
+  // ===========================================
+
+  // 优惠券管理
+  getCoupons: (params?: { page?: number; pageSize?: number; status?: string; keyword?: string }) => {
+    const query = new URLSearchParams();
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined) {
+          query.append(key, String(value));
+        }
+      });
+    }
+    return request(`/admin/coupons?${query.toString()}`);
+  },
+
+  getCoupon: (id: string) =>
+    request(`/admin/coupons/${id}`),
+
+  createCoupon: (data: {
+    name: string;
+    type: 'discount' | 'full_reduction';
+    discount_amount: number;
+    min_amount?: number;
+    total_count: number;
+    start_time: string;
+    end_time: string;
+    limit_per_user?: number;
+    description?: string;
+  }) =>
+    request('/admin/coupons', { method: 'POST', body: data }),
+
+  updateCoupon: (id: string, data: Partial<{
+    name: string;
+    type: string;
+    discount_amount: number;
+    min_amount: number;
+    total_count: number;
+    start_time: string;
+    end_time: string;
+    limit_per_user: number;
+    description: string;
+    status: string;
+  }>) =>
+    request(`/admin/coupons/${id}`, { method: 'PUT', body: data }),
+
+  deleteCoupon: (id: string) =>
+    request(`/admin/coupons/${id}`, { method: 'DELETE' }),
+
+  getCouponRecords: (id: string, params?: { page?: number; pageSize?: number; status?: string }) => {
+    const query = new URLSearchParams();
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined) {
+          query.append(key, String(value));
+        }
+      });
+    }
+    return request(`/admin/coupons/${id}/records?${query.toString()}`);
+  },
+
+  // 秒杀活动管理
+  getFlashSales: (params?: { page?: number; pageSize?: number; status?: string; keyword?: string }) => {
+    const query = new URLSearchParams();
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined) {
+          query.append(key, String(value));
+        }
+      });
+    }
+    return request(`/admin/flash-sales?${query.toString()}`);
+  },
+
+  getFlashSale: (id: string) =>
+    request(`/admin/flash-sales/${id}`),
+
+  createFlashSale: (data: {
+    product_id: string;
+    flash_price: number;
+    stock: number;
+    start_time: string;
+    end_time: string;
+    limit_per_user?: number;
+  }) =>
+    request('/admin/flash-sales', { method: 'POST', body: data }),
+
+  updateFlashSale: (id: string, data: Partial<{
+    flash_price: number;
+    stock: number;
+    start_time: string;
+    end_time: string;
+    limit_per_user: number;
+    status: string;
+  }>) =>
+    request(`/admin/flash-sales/${id}`, { method: 'PUT', body: data }),
+
+  deleteFlashSale: (id: string) =>
+    request(`/admin/flash-sales/${id}`, { method: 'DELETE' }),
+
+  // 团购活动管理
+  getGroupBuys: (params?: { page?: number; pageSize?: number; status?: string; keyword?: string }) => {
+    const query = new URLSearchParams();
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined) {
+          query.append(key, String(value));
+        }
+      });
+    }
+    return request(`/admin/group-buys?${query.toString()}`);
+  },
+
+  getGroupBuy: (id: string) =>
+    request(`/admin/group-buys/${id}`),
+
+  createGroupBuy: (data: {
+    product_id: string;
+    group_price: number;
+    min_quantity: number;
+    start_time: string;
+    end_time: string;
+  }) =>
+    request('/admin/group-buys', { method: 'POST', body: data }),
+
+  updateGroupBuy: (id: string, data: Partial<{
+    group_price: number;
+    min_quantity: number;
+    start_time: string;
+    end_time: string;
+    status: string;
+  }>) =>
+    request(`/admin/group-buys/${id}`, { method: 'PUT', body: data }),
+
+  deleteGroupBuy: (id: string) =>
+    request(`/admin/group-buys/${id}`, { method: 'DELETE' }),
+
+  getGroupBuyRecords: (id: string, params?: { page?: number; pageSize?: number }) => {
+    const query = new URLSearchParams();
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined) {
+          query.append(key, String(value));
+        }
+      });
+    }
+    return request(`/admin/group-buys/${id}/records?${query.toString()}`);
   }
 };
 

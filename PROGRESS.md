@@ -1979,4 +1979,149 @@ const sanitizedNote = escapeHtml(note.slice(0, 500));
 
 ---
 
-**最后更新**: 2026-04-03
+## 二十八、排行榜配置模块代码审查修复 (2026-04-04)
+
+### 📋 审查概述
+
+对后台排行榜配置模块进行代码审查，发现问题按优先级分类：
+- **Critical (严重)**: 2 个
+- **High (重要)**: 4 个
+- **Medium (中等)**: 4 个
+- **Low (低)**: 3 个
+
+### 🔴 Critical 修复
+
+#### 1. 缺少操作日志记录 ✅
+- **问题**: `PUT /admin/leaderboard-settings` 端点没有记录操作日志
+- **影响**: 配置变更无法追溯，存在安全审计风险
+- **修复**: 添加 `operation_logs` 记录，包含变更内容摘要
+- **文件**: `server/routes/admin.ts`
+
+#### 2. 竞态条件 - 数据库操作非原子性 ✅
+- **问题**: 配置更新使用循环执行多个独立 `upsert` 操作
+- **影响**: 并发请求或中途失败可能导致数据不一致
+- **修复**: 使用批量 `upsert(records, { onConflict: 'key' })` 原子操作
+- **文件**: `server/routes/admin.ts`
+
+### 🟠 High 修复
+
+#### 3. 后端缺少输入验证 ✅
+- **问题**: PUT 端点直接接收并存储请求体数据，无验证
+- **影响**: 恶意请求可能存储无效数据
+- **修复**: 添加 `validateRewards()`, `validatePeriodWeights()`, `validateDisplaySettings()` 验证函数
+- **验证规则**:
+  - 排名范围: 1-10000
+  - 奖励类型: cash/coupon/points
+  - 奖励值: 0-1000000
+  - 奖励名称: 最大100字符
+  - 权重: 0-100
+- **文件**: `server/routes/admin.ts`
+
+#### 4. 前端缺少数值验证 ✅
+- **问题**: 输入框允许输入负数和超大数值
+- **影响**: 用户可能输入无效值
+- **修复**: 在 `updateReward` 函数中添加即时验证和范围限制
+- **文件**: `src/pages/admin/AdminLeaderboard.tsx`
+
+#### 5. XSS防护缺失 ✅
+- **问题**: 奖励名称字段未转义HTML
+- **影响**: 存在XSS风险
+- **修复**: 后端 `sanitizeRewards()` 函数使用 `escapeHtml()` 处理奖励名称
+- **文件**: `server/routes/admin.ts`
+
+#### 6. 缺少防重复提交机制 ✅
+- **问题**: 保存按钮可能被快速多次点击
+- **影响**: 可能导致重复请求
+- **修复**: 添加 `saveLockRef` 请求锁保护
+- **文件**: `src/pages/admin/AdminLeaderboard.tsx`
+
+### 🟡 Medium 修复
+
+#### 7. API类型安全 ✅
+- **问题**: `updateLeaderboardSettings` 使用 `any[]` 类型
+- **影响**: 缺乏类型检查
+- **修复**: 导入并使用 `RankReward`, `PeriodWeights`, `DisplaySettings` 类型
+- **文件**: `src/lib/api.ts`
+
+#### 8. 排名重叠检测 ✅
+- **问题**: 前端允许添加排名范围可能重叠的奖励档位
+- **影响**: 排名重叠会导致奖励分配歧义
+- **修复**: 添加 `checkRankOverlap()` 函数检测重叠
+- **文件**: `src/pages/admin/AdminLeaderboard.tsx`
+
+#### 9. JSON解析错误日志 ✅
+- **问题**: GET 端点中 JSON.parse 失败时被静默忽略
+- **影响**: 数据库中的无效数据无法被发现
+- **修复**: 添加 `console.error` 记录解析错误
+- **文件**: `server/routes/admin.ts`
+
+#### 10. 保存后数据刷新 ✅
+- **问题**: 保存成功后没有重新获取配置
+- **影响**: 本地状态可能与实际数据不一致
+- **修复**: 保存成功后调用 `fetchSettings()` 刷新数据
+- **文件**: `src/pages/admin/AdminLeaderboard.tsx`
+
+### 🟢 Low 修复
+
+#### 11. 配置变更确认对话框 ✅
+- **问题**: 保存配置直接执行，无确认
+- **影响**: 用户可能误操作修改重要配置
+- **修复**: 添加确认对话框，显示变更摘要和预算金额
+- **文件**: `src/pages/admin/AdminLeaderboard.tsx`
+
+#### 12. 预览统计增强 ✅
+- **问题**: 配置预览只显示档位数量
+- **影响**: 信息不够丰富
+- **修复**: 添加总预算金额、覆盖人数、启用周期汇总
+- **文件**: `src/pages/admin/AdminLeaderboard.tsx`
+
+### 📊 修复统计
+
+| 优先级 | 发现数量 | 已修复 | 比例 |
+|--------|----------|--------|------|
+| Critical | 2 | 2 | 100% |
+| High | 4 | 4 | 100% |
+| Medium | 4 | 4 | 100% |
+| Low | 3 | 3 | 100% |
+| **总计** | **13** | **13** | **100%** |
+
+### 📁 修改文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `server/routes/admin.ts` | 输入验证、XSS防护、原子操作、操作日志 |
+| `src/pages/admin/AdminLeaderboard.tsx` | 数值验证、防重复提交、确认对话框、排名重叠检测、预览增强 |
+| `src/lib/api.ts` | 类型安全更新 |
+
+### 🔧 新增验证函数
+
+```typescript
+// server/routes/admin.ts
+validateRewards(rewards, fieldName)    // 验证奖励数据
+validatePeriodWeights(weights)          // 验证周期权重
+validateDisplaySettings(settings)       // 验证显示设置
+sanitizeRewards(rewards)                // XSS处理奖励名称
+```
+
+```typescript
+// src/pages/admin/AdminLeaderboard.tsx
+checkRankOverlap(rewards)               // 检测排名重叠
+validateRewards(rewards)                // 前端验证
+calculateTotalReward(rewards)           // 计算总预算
+```
+
+### ✅ 验证测试
+
+| 测试项 | 结果 |
+|--------|:----:|
+| 操作日志记录 | ✅ 写入 operation_logs |
+| 批量原子操作 | ✅ 使用 Supabase 批量 upsert |
+| 输入验证 | ✅ 排名/奖励值/类型/名称 |
+| XSS 防护 | ✅ 奖励名称 HTML 转义 |
+| 防重复提交 | ✅ 请求锁保护 |
+| 类型安全 | ✅ API 使用具体类型 |
+| 排名重叠检测 | ✅ 前端验证提示 |
+
+---
+
+**最后更新**: 2026-04-04

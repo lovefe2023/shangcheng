@@ -3267,6 +3267,73 @@ router.put('/distribution-settings', async (req: Request, res: Response) => {
 // 排行榜配置
 // ===========================================
 
+// 排行榜奖励验证函数
+interface RankReward {
+  rank_start: number;
+  rank_end: number;
+  reward: string;
+  reward_type: 'cash' | 'coupon' | 'points';
+  reward_value: number;
+}
+
+const VALID_REWARD_TYPES = ['cash', 'coupon', 'points'];
+const MAX_REWARD_VALUE = 1000000;
+const MAX_REWARD_NAME_LENGTH = 100;
+
+const validateRewards = (rewards: any[], fieldName: string): string | null => {
+  if (!Array.isArray(rewards)) return `${fieldName} 必须是数组`;
+  if (rewards.length > 50) return `${fieldName} 最多支持50个档位`;
+
+  for (let i = 0; i < rewards.length; i++) {
+    const r = rewards[i];
+    if (typeof r.rank_start !== 'number' || r.rank_start < 1 || r.rank_start > 10000)
+      return `${fieldName}[${i}] 排名起始值无效(1-10000)`;
+    if (typeof r.rank_end !== 'number' || r.rank_end < r.rank_start || r.rank_end > 10000)
+      return `${fieldName}[${i}] 排名结束值无效`;
+    if (typeof r.reward !== 'string' || r.reward.length > MAX_REWARD_NAME_LENGTH)
+      return `${fieldName}[${i}] 奖励名称无效(最多${MAX_REWARD_NAME_LENGTH}字符)`;
+    if (!VALID_REWARD_TYPES.includes(r.reward_type))
+      return `${fieldName}[${i}] 奖励类型无效(仅支持cash/coupon/points)`;
+    if (typeof r.reward_value !== 'number' || r.reward_value < 0)
+      return `${fieldName}[${i}] 奖励值不能为负数`;
+    if (r.reward_value > MAX_REWARD_VALUE)
+      return `${fieldName}[${i}] 奖励值超出限制(最大${MAX_REWARD_VALUE})`;
+  }
+  return null;
+};
+
+const validatePeriodWeights = (weights: any): string | null => {
+  if (!weights || typeof weights !== 'object') return '周期权重格式错误';
+  const validKeys = ['week', 'month', 'year'];
+  for (const key of Object.keys(weights)) {
+    if (!validKeys.includes(key)) return `无效的周期类型: ${key}`;
+    const config = weights[key];
+    if (typeof config.enabled !== 'boolean') return `${key}.enabled 必须是布尔值`;
+    if (typeof config.weight !== 'number' || config.weight < 0 || config.weight > 100)
+      return `${key}.weight 权重值无效(0-100)`;
+  }
+  return null;
+};
+
+const validateDisplaySettings = (settings: any): string | null => {
+  if (!settings || typeof settings !== 'object') return '显示设置格式错误';
+  if (typeof settings.show_real_name !== 'boolean') return 'show_real_name 必须是布尔值';
+  if (typeof settings.show_sales_amount !== 'boolean') return 'show_sales_amount 必须是布尔值';
+  if (typeof settings.show_income_amount !== 'boolean') return 'show_income_amount 必须是布尔值';
+  if (typeof settings.top_count !== 'number' || settings.top_count < 1 || settings.top_count > 100)
+    return 'top_count 无效(1-100)';
+  if (!['realtime', 'hourly', 'daily'].includes(settings.update_frequency))
+    return 'update_frequency 无效(仅支持realtime/hourly/daily)';
+  return null;
+};
+
+const sanitizeRewards = (rewards: RankReward[]): RankReward[] => {
+  return rewards.map(r => ({
+    ...r,
+    reward: escapeHtml(r.reward.slice(0, MAX_REWARD_NAME_LENGTH))
+  }));
+};
+
 /**
  * GET /api/admin/leaderboard-settings
  * 获取排行榜配置
@@ -3311,8 +3378,9 @@ router.get('/leaderboard-settings', async (req: Request, res: Response) => {
       try {
         const key = s.key.replace('leaderboard_', '');
         config[key] = JSON.parse(s.value);
-      } catch {
-        // ignore parse error
+      } catch (parseError) {
+        console.error(`Failed to parse leaderboard setting ${s.key}:`, parseError);
+        // 使用默认值
       }
     });
 
@@ -3340,13 +3408,35 @@ router.put('/leaderboard-settings', async (req: Request, res: Response) => {
   try {
     const { sales_rewards, income_rewards, period_weights, display_settings } = req.body;
 
-    const updates: Array<{ key: string; value: string }> = [];
-
+    // 输入验证
     if (sales_rewards) {
-      updates.push({ key: 'leaderboard_sales_rewards', value: JSON.stringify(sales_rewards) });
+      const err = validateRewards(sales_rewards, '销售榜奖励');
+      if (err) return res.status(400).json({ success: false, error: { code: 'INVALID_DATA', message: err } });
     }
     if (income_rewards) {
-      updates.push({ key: 'leaderboard_income_rewards', value: JSON.stringify(income_rewards) });
+      const err = validateRewards(income_rewards, '收益榜奖励');
+      if (err) return res.status(400).json({ success: false, error: { code: 'INVALID_DATA', message: err } });
+    }
+    if (period_weights) {
+      const err = validatePeriodWeights(period_weights);
+      if (err) return res.status(400).json({ success: false, error: { code: 'INVALID_DATA', message: err } });
+    }
+    if (display_settings) {
+      const err = validateDisplaySettings(display_settings);
+      if (err) return res.status(400).json({ success: false, error: { code: 'INVALID_DATA', message: err } });
+    }
+
+    // XSS处理
+    const sanitizedSalesRewards = sales_rewards ? sanitizeRewards(sales_rewards) : undefined;
+    const sanitizedIncomeRewards = income_rewards ? sanitizeRewards(income_rewards) : undefined;
+
+    const updates: Array<{ key: string; value: string }> = [];
+
+    if (sanitizedSalesRewards) {
+      updates.push({ key: 'leaderboard_sales_rewards', value: JSON.stringify(sanitizedSalesRewards) });
+    }
+    if (sanitizedIncomeRewards) {
+      updates.push({ key: 'leaderboard_income_rewards', value: JSON.stringify(sanitizedIncomeRewards) });
     }
     if (period_weights) {
       updates.push({ key: 'leaderboard_period_weights', value: JSON.stringify(period_weights) });
@@ -3355,11 +3445,39 @@ router.put('/leaderboard-settings', async (req: Request, res: Response) => {
       updates.push({ key: 'leaderboard_display_settings', value: JSON.stringify(display_settings) });
     }
 
-    for (const update of updates) {
-      await supabaseAdmin
+    // 批量原子操作（修复竞态条件）
+    if (updates.length > 0) {
+      const records = updates.map(u => ({ key: u.key, value: u.value }));
+      const { error } = await supabaseAdmin
         .from('settings')
-        .upsert({ key: update.key, value: update.value }, { onConflict: 'key' });
+        .upsert(records, { onConflict: 'key' });
+
+      if (error) {
+        console.error('Batch upsert leaderboard settings error:', error);
+        return res.status(500).json({
+          success: false,
+          error: { code: 'DB_ERROR', message: '配置保存失败' }
+        });
+      }
     }
+
+    // 记录操作日志
+    const adminUser = (req as any).user;
+    await supabaseAdmin
+      .from('operation_logs')
+      .insert({
+        operator_id: adminUser?.id || 'unknown',
+        type: 'update_leaderboard_settings',
+        target_type: 'settings',
+        target_id: 'leaderboard',
+        detail: JSON.stringify({
+          sales_rewards_count: sanitizedSalesRewards?.length || 0,
+          income_rewards_count: sanitizedIncomeRewards?.length || 0,
+          period_weights_keys: period_weights ? Object.keys(period_weights) : [],
+          display_settings_updated: !!display_settings
+        }),
+        created_at: new Date().toISOString()
+      });
 
     res.json({
       success: true,
