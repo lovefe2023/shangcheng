@@ -629,6 +629,83 @@ export const adminApi = {
   }) =>
     request('/admin/leaderboard-settings', { method: 'PUT', body: data }),
 
+  // ===========================================
+  // 内容管理
+  // ===========================================
+
+  // Banner管理
+  getBanners: (params?: { page?: number; pageSize?: number; keyword?: string; status?: string }) => {
+    const query = new URLSearchParams();
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined) query.append(key, String(value));
+      });
+    }
+    return request(`/admin/banners?${query.toString()}`);
+  },
+
+  createBanner: (data: { title?: string; image_url: string; link_url?: string; sort_order?: number; status?: string }) =>
+    request('/admin/banners', { method: 'POST', body: data }),
+
+  updateBanner: (id: string, data: { title?: string; image_url?: string; link_url?: string; sort_order?: number }) =>
+    request(`/admin/banners/${id}`, { method: 'PUT', body: data }),
+
+  toggleBannerStatus: (id: string, status: 'visible' | 'hidden') =>
+    request(`/admin/banners/${id}/status`, { method: 'PUT', body: { status } }),
+
+  deleteBanner: (id: string) =>
+    request(`/admin/banners/${id}`, { method: 'DELETE' }),
+
+  // 公告管理
+  getNotifications: (params?: { page?: number; pageSize?: number; keyword?: string; type?: string; status?: string }) => {
+    const query = new URLSearchParams();
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined) query.append(key, String(value));
+      });
+    }
+    return request(`/admin/notifications?${query.toString()}`);
+  },
+
+  createNotification: (data: { title: string; content?: string; type?: string; status?: string }) =>
+    request('/admin/notifications', { method: 'POST', body: data }),
+
+  updateNotification: (id: string, data: { title?: string; content?: string; type?: string }) =>
+    request(`/admin/notifications/${id}`, { method: 'PUT', body: data }),
+
+  toggleNotificationStatus: (id: string, status: 'published' | 'draft') =>
+    request(`/admin/notifications/${id}/status`, { method: 'PUT', body: { status } }),
+
+  deleteNotification: (id: string) =>
+    request(`/admin/notifications/${id}`, { method: 'DELETE' }),
+
+  // FAQ管理
+  getFaqs: (params?: { page?: number; pageSize?: number; keyword?: string; category?: string }) => {
+    const query = new URLSearchParams();
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined) query.append(key, String(value));
+      });
+    }
+    return request(`/admin/faqs?${query.toString()}`);
+  },
+
+  createFaq: (data: { category?: string; question: string; answer: string; sort_order?: number; status?: string }) =>
+    request('/admin/faqs', { method: 'POST', body: data }),
+
+  updateFaq: (id: string, data: { category?: string; question?: string; answer?: string; sort_order?: number }) =>
+    request(`/admin/faqs/${id}`, { method: 'PUT', body: data }),
+
+  deleteFaq: (id: string) =>
+    request(`/admin/faqs/${id}`, { method: 'DELETE' }),
+
+  // 招募页配置
+  getRecruitSettings: () =>
+    request('/admin/recruit-settings'),
+
+  updateRecruitSettings: (data: { title?: string; description?: string; imageUrl?: string; benefits?: string[] }) =>
+    request('/admin/recruit-settings', { method: 'PUT', body: data }),
+
   // 系统设置
   getSettings: () =>
     request('/admin/settings'),

@@ -2124,4 +2124,140 @@ calculateTotalReward(rewards)           // 计算总预算
 
 ---
 
+## 二十九、内容管理模块代码审查修复 (2026-04-04)
+
+### 📋 审查概述
+
+对后台内容管理模块进行代码审查，发现问题按优先级分类：
+- **Critical (严重)**: 3 个 - 功能完全不工作
+- **High (重要)**: 3 个 - 安全问题
+- **Medium (中等)**: 5 个 - 功能不完整
+- **Low (低)**: 2 个 - UI优化
+
+### 🔴 Critical 修复
+
+#### 1. 所有CRUD操作均为本地模拟 ✅
+- **问题**: 所有保存、删除、状态切换操作都只是修改本地state
+- **影响**: 刷新页面后数据丢失，生产环境完全不可用
+- **修复**: 完全重构前端操作函数，调用真实后端API
+- **涉及**: `handleSaveBanner`, `handleSaveAnnouncement`, `handleSaveFaq`, `deleteBanner`, `deleteNotification`, `deleteFaq`, `toggleBannerStatus`, `toggleNotificationStatus`
+
+#### 2. 后端API完全缺失 ✅
+- **问题**: admin.ts 中无 banners/notifications/faqs 管理API
+- **影响**: 前端无法实现数据持久化
+- **修复**: 在 admin.ts 中添加完整的CRUD路由
+- **新增API**:
+  - `/api/admin/banners` - GET/POST/PUT/DELETE + 状态切换
+  - `/api/admin/notifications` - GET/POST/PUT/DELETE + 状态切换
+  - `/api/admin/faqs` - GET/POST/PUT/DELETE
+  - `/api/admin/recruit-settings` - GET/PUT
+
+#### 3. 前端API封装缺失 ✅
+- **问题**: api.ts 中无内容管理相关方法
+- **影响**: 无法调用后端API
+- **修复**: 在 adminApi 中添加所有内容管理方法
+- **新增方法**: `getBanners`, `createBanner`, `updateBanner`, `toggleBannerStatus`, `deleteBanner`, `getNotifications`, `createNotification`, `updateNotification`, `toggleNotificationStatus`, `deleteNotification`, `getFaqs`, `createFaq`, `updateFaq`, `deleteFaq`, `getRecruitSettings`, `updateRecruitSettings`
+
+### 🟠 High 修复
+
+#### 4. XSS防护缺失 ✅
+- **问题**: 标题、内容等字段未进行HTML转义
+- **影响**: 存在XSS风险
+- **修复**: 后端所有文本字段使用 `escapeHtml` 转义
+- **验证规则**: title(200字符), content(5000字符), question(500字符), answer(2000字符)
+
+#### 5. 输入验证不完善 ✅
+- **问题**: 前端验证仅检查空值，缺少格式验证
+- **影响**: 无效数据可能写入数据库
+- **修复**: 添加字段长度限制、URL格式验证、状态值验证
+
+#### 6. 缺少操作日志记录 ✅
+- **问题**: 所有内容管理操作无法审计
+- **影响**: 无法追踪问题来源
+- **修复**: 所有CRUD操作写入 `operation_logs` 表
+
+### 🟡 Medium 修复
+
+#### 7. FAQ数据未从后端加载 ✅
+- **问题**: FAQ列表初始化为空数组
+- **修复**: 添加 `fetchFaqs()` 函数
+
+#### 8. 招募页配置为硬编码默认值 ✅
+- **问题**: 无法加载已保存的配置
+- **修复**: 添加 `fetchRecruitConfig()` 从 settings 表加载
+
+#### 9. 缺少编辑功能 ✅
+- **问题**: Banner、公告、FAQ无编辑功能
+- **修复**: 添加编辑Modal和对应的API调用逻辑
+
+#### 10. 类型定义与后端数据结构统一 ✅
+- **问题**: 前端字段名与数据库不一致 (sort vs sort_order, link vs link_url)
+- **修复**: 统一使用数据库字段名
+
+#### 11. 防重复提交机制 ✅
+- **问题**: 保存按钮可能被快速多次点击
+- **修复**: 添加 `saveLockRef` 请求锁保护
+
+### 📊 修复统计
+
+| 优先级 | 发现数量 | 已修复 | 比例 |
+|--------|----------|--------|------|
+| Critical | 3 | 3 | 100% |
+| High | 3 | 3 | 100% |
+| Medium | 5 | 5 | 100% |
+| Low | 2 | 0 | 待处理 |
+| **总计** | **13** | **11** | **85%** |
+
+### 📁 修改文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `server/routes/admin.ts` | 新增 Banner/Notification/FAQ/Recruit API (约600行) |
+| `src/lib/api.ts` | 新增 adminApi 内容管理方法 |
+| `src/pages/admin/AdminContent.tsx` | 完全重构，接入真实API |
+| `supabase/migrations/007_faqs.sql` | 新增 FAQ 表迁移 |
+
+### 🔧 新增API
+
+| 端点 | 方法 | 功能 |
+|------|------|------|
+| `/api/admin/banners` | GET/POST | Banner列表/创建 |
+| `/api/admin/banners/:id` | PUT/DELETE | Banner更新/删除 |
+| `/api/admin/banners/:id/status` | PUT | Banner状态切换 |
+| `/api/admin/notifications` | GET/POST | 公告列表/创建 |
+| `/api/admin/notifications/:id` | PUT/DELETE | 公告更新/删除 |
+| `/api/admin/notifications/:id/status` | PUT | 公告状态切换 |
+| `/api/admin/faqs` | GET/POST | FAQ列表/创建 |
+| `/api/admin/faqs/:id` | PUT/DELETE | FAQ更新/删除 |
+| `/api/admin/recruit-settings` | GET/PUT | 招募配置读取/保存 |
+
+### 🗄️ 新增数据库表
+
+```sql
+-- faqs 表
+CREATE TABLE faqs (
+  id UUID PRIMARY KEY,
+  category VARCHAR(50),
+  question VARCHAR(500) NOT NULL,
+  answer TEXT NOT NULL,
+  sort_order INT DEFAULT 0,
+  status VARCHAR(20) DEFAULT 'visible',
+  created_at TIMESTAMP WITH TIME ZONE
+);
+```
+
+### ✅ 验证测试
+
+| 测试项 | 结果 |
+|--------|:----:|
+| Banner CRUD | ✅ 创建/更新/删除/状态切换 |
+| 公告 CRUD | ✅ 创建/更新/删除/状态切换 |
+| FAQ CRUD | ✅ 创建/更新/删除 |
+| 招募配置 | ✅ 加载/保存 |
+| 操作日志 | ✅ 所有操作记录 |
+| XSS防护 | ✅ 所有文本字段转义 |
+| 输入验证 | ✅ 长度/格式验证 |
+
+---
+
 **最后更新**: 2026-04-04

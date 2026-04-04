@@ -5002,4 +5002,970 @@ router.get('/group-buys/:id/records', async (req: Request, res: Response) => {
   }
 });
 
+// ===========================================
+// 内容管理 - Banner管理
+// ===========================================
+
+/**
+ * GET /api/admin/banners
+ * 获取Banner列表
+ */
+router.get('/banners', async (req: Request, res: Response) => {
+  try {
+    const { keyword, status, page = 1, pageSize = 20 } = req.query;
+
+    let query = supabaseAdmin
+      .from('banners')
+      .select('*', { count: 'exact' })
+      .order('sort_order', { ascending: true });
+
+    if (keyword) {
+      query = query.ilike('title', `%${sanitizeLikePattern(keyword as string)}%`);
+    }
+    if (status && ['visible', 'hidden'].includes(status as string)) {
+      query = query.eq('status', status);
+    }
+
+    const pageNum = Math.max(1, parseInt(page as string) || 1);
+    const pageSizeNum = Math.min(100, Math.max(1, parseInt(pageSize as string) || 20));
+    const from = (pageNum - 1) * pageSizeNum;
+    const to = from + pageSizeNum - 1;
+
+    const { data: banners, error, count } = await query.range(from, to);
+
+    if (error) {
+      console.error('Get banners error:', error);
+      return res.status(500).json({
+        success: false,
+        error: { code: 'QUERY_ERROR', message: '查询失败' }
+      });
+    }
+
+    res.json({
+      success: true,
+      data: { list: banners || [], total: count || 0, page: pageNum, pageSize: pageSizeNum }
+    });
+  } catch (error) {
+    console.error('Get banners error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * POST /api/admin/banners
+ * 创建Banner
+ */
+router.post('/banners', async (req: Request, res: Response) => {
+  try {
+    const { title, image_url, link_url, sort_order, status } = req.body;
+
+    // 验证
+    if (!image_url || typeof image_url !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'INVALID_PARAMS', message: '图片URL不能为空' }
+      });
+    }
+    if (image_url.length > 500) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'INVALID_PARAMS', message: '图片URL长度超出限制' }
+      });
+    }
+
+    const sanitizedTitle = title ? escapeHtml(title.slice(0, 100)) : null;
+    const sanitizedLinkUrl = link_url ? link_url.slice(0, 500) : null;
+
+    const { data: banner, error } = await supabaseAdmin
+      .from('banners')
+      .insert({
+        title: sanitizedTitle,
+        image_url,
+        link_url: sanitizedLinkUrl,
+        sort_order: typeof sort_order === 'number' ? sort_order : 0,
+        status: status === 'hidden' ? 'hidden' : 'visible'
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Create banner error:', error);
+      return res.status(500).json({
+        success: false,
+        error: { code: 'CREATE_ERROR', message: '创建失败' }
+      });
+    }
+
+    // 操作日志
+    await supabaseAdmin.from('operation_logs').insert({
+      operator_id: (req as any).user?.id || 'unknown',
+      type: 'banner_create',
+      target_type: 'banner',
+      target_id: banner.id,
+      detail: `创建Banner: ${sanitizedTitle || '无标题'}`,
+      created_at: new Date().toISOString()
+    });
+
+    res.json({ success: true, data: banner });
+  } catch (error) {
+    console.error('Create banner error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * PUT /api/admin/banners/:id
+ * 更新Banner
+ */
+router.put('/banners/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { title, image_url, link_url, sort_order } = req.body;
+
+    // 验证ID格式
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'INVALID_PARAMS', message: '无效的Banner ID' }
+      });
+    }
+
+    // 检查存在
+    const { data: existing } = await supabaseAdmin
+      .from('banners')
+      .select('id, title')
+      .eq('id', id)
+      .single();
+
+    if (!existing) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Banner不存在' }
+      });
+    }
+
+    const updateData: any = { updated_at: new Date().toISOString() };
+    if (title !== undefined) updateData.title = escapeHtml(String(title).slice(0, 100));
+    if (image_url !== undefined) {
+      if (typeof image_url !== 'string' || image_url.length > 500) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'INVALID_PARAMS', message: '图片URL无效' }
+        });
+      }
+      updateData.image_url = image_url;
+    }
+    if (link_url !== undefined) updateData.link_url = String(link_url).slice(0, 500);
+    if (sort_order !== undefined) updateData.sort_order = parseInt(sort_order) || 0;
+
+    const { data: banner, error } = await supabaseAdmin
+      .from('banners')
+      .update(updateData)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Update banner error:', error);
+      return res.status(500).json({
+        success: false,
+        error: { code: 'UPDATE_ERROR', message: '更新失败' }
+      });
+    }
+
+    // 操作日志
+    await supabaseAdmin.from('operation_logs').insert({
+      operator_id: (req as any).user?.id || 'unknown',
+      type: 'banner_update',
+      target_type: 'banner',
+      target_id: id,
+      detail: `更新Banner: ${existing.title || '无标题'}`,
+      created_at: new Date().toISOString()
+    });
+
+    res.json({ success: true, data: banner });
+  } catch (error) {
+    console.error('Update banner error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * PUT /api/admin/banners/:id/status
+ * 切换Banner状态
+ */
+router.put('/banners/:id/status', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    if (!['visible', 'hidden'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'INVALID_PARAMS', message: '状态值无效' }
+      });
+    }
+
+    const { data: existing } = await supabaseAdmin
+      .from('banners')
+      .select('id, title, status')
+      .eq('id', id)
+      .single();
+
+    if (!existing) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Banner不存在' }
+      });
+    }
+
+    const { error } = await supabaseAdmin
+      .from('banners')
+      .update({ status, updated_at: new Date().toISOString() })
+      .eq('id', id);
+
+    if (error) {
+      console.error('Update banner status error:', error);
+      return res.status(500).json({
+        success: false,
+        error: { code: 'UPDATE_ERROR', message: '更新失败' }
+      });
+    }
+
+    await supabaseAdmin.from('operation_logs').insert({
+      operator_id: (req as any).user?.id || 'unknown',
+      type: 'banner_status_change',
+      target_type: 'banner',
+      target_id: id,
+      detail: `Banner状态: ${existing.status} → ${status}`,
+      created_at: new Date().toISOString()
+    });
+
+    res.json({ success: true, message: '状态已更新' });
+  } catch (error) {
+    console.error('Update banner status error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * DELETE /api/admin/banners/:id
+ * 删除Banner
+ */
+router.delete('/banners/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const { data: existing } = await supabaseAdmin
+      .from('banners')
+      .select('id, title')
+      .eq('id', id)
+      .single();
+
+    if (!existing) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'Banner不存在' }
+      });
+    }
+
+    const { error } = await supabaseAdmin
+      .from('banners')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      console.error('Delete banner error:', error);
+      return res.status(500).json({
+        success: false,
+        error: { code: 'DELETE_ERROR', message: '删除失败' }
+      });
+    }
+
+    await supabaseAdmin.from('operation_logs').insert({
+      operator_id: (req as any).user?.id || 'unknown',
+      type: 'banner_delete',
+      target_type: 'banner',
+      target_id: id,
+      detail: `删除Banner: ${existing.title || '无标题'}`,
+      created_at: new Date().toISOString()
+    });
+
+    res.json({ success: true, message: '删除成功' });
+  } catch (error) {
+    console.error('Delete banner error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+// ===========================================
+// 内容管理 - 公告管理
+// ===========================================
+
+/**
+ * GET /api/admin/notifications
+ * 获取公告列表
+ */
+router.get('/notifications', async (req: Request, res: Response) => {
+  try {
+    const { keyword, type, status, page = 1, pageSize = 20 } = req.query;
+
+    let query = supabaseAdmin
+      .from('notifications')
+      .select('*', { count: 'exact' })
+      .order('created_at', { ascending: false });
+
+    if (keyword) {
+      query = query.or(`title.ilike.%${sanitizeLikePattern(keyword as string)}%,content.ilike.%${sanitizeLikePattern(keyword as string)}%`);
+    }
+    if (type && ['announcement', 'notice', 'faq'].includes(type as string)) {
+      query = query.eq('type', type);
+    }
+    if (status && ['published', 'draft'].includes(status as string)) {
+      query = query.eq('status', status);
+    }
+
+    const pageNum = Math.max(1, parseInt(page as string) || 1);
+    const pageSizeNum = Math.min(100, Math.max(1, parseInt(pageSize as string) || 20));
+    const from = (pageNum - 1) * pageSizeNum;
+    const to = from + pageSizeNum - 1;
+
+    const { data: notifications, error, count } = await query.range(from, to);
+
+    if (error) {
+      console.error('Get notifications error:', error);
+      return res.status(500).json({
+        success: false,
+        error: { code: 'QUERY_ERROR', message: '查询失败' }
+      });
+    }
+
+    res.json({
+      success: true,
+      data: { list: notifications || [], total: count || 0, page: pageNum, pageSize: pageSizeNum }
+    });
+  } catch (error) {
+    console.error('Get notifications error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * POST /api/admin/notifications
+ * 创建公告
+ */
+router.post('/notifications', async (req: Request, res: Response) => {
+  try {
+    const { title, content, type, status } = req.body;
+
+    // 验证
+    if (!title || typeof title !== 'string' || title.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'INVALID_PARAMS', message: '公告标题不能为空' }
+      });
+    }
+    if (title.length > 200) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'INVALID_PARAMS', message: '标题长度超出限制(200字符)' }
+      });
+    }
+
+    const sanitizedTitle = escapeHtml(title.trim());
+    const sanitizedContent = content ? escapeHtml(String(content).slice(0, 5000)) : null;
+
+    const { data: notification, error } = await supabaseAdmin
+      .from('notifications')
+      .insert({
+        title: sanitizedTitle,
+        content: sanitizedContent,
+        type: type && ['announcement', 'notice', 'faq'].includes(type) ? type : 'announcement',
+        status: status === 'draft' ? 'draft' : 'published'
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Create notification error:', error);
+      return res.status(500).json({
+        success: false,
+        error: { code: 'CREATE_ERROR', message: '创建失败' }
+      });
+    }
+
+    await supabaseAdmin.from('operation_logs').insert({
+      operator_id: (req as any).user?.id || 'unknown',
+      type: 'notification_create',
+      target_type: 'notification',
+      target_id: notification.id,
+      detail: `创建公告: ${sanitizedTitle}`,
+      created_at: new Date().toISOString()
+    });
+
+    res.json({ success: true, data: notification });
+  } catch (error) {
+    console.error('Create notification error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * PUT /api/admin/notifications/:id
+ * 更新公告
+ */
+router.put('/notifications/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { title, content, type } = req.body;
+
+    const { data: existing } = await supabaseAdmin
+      .from('notifications')
+      .select('id, title')
+      .eq('id', id)
+      .single();
+
+    if (!existing) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: '公告不存在' }
+      });
+    }
+
+    const updateData: any = {};
+    if (title !== undefined) {
+      if (!title || title.trim().length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'INVALID_PARAMS', message: '公告标题不能为空' }
+        });
+      }
+      updateData.title = escapeHtml(String(title).trim().slice(0, 200));
+    }
+    if (content !== undefined) updateData.content = escapeHtml(String(content).slice(0, 5000));
+    if (type !== undefined && ['announcement', 'notice', 'faq'].includes(type)) {
+      updateData.type = type;
+    }
+
+    const { data: notification, error } = await supabaseAdmin
+      .from('notifications')
+      .update(updateData)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Update notification error:', error);
+      return res.status(500).json({
+        success: false,
+        error: { code: 'UPDATE_ERROR', message: '更新失败' }
+      });
+    }
+
+    await supabaseAdmin.from('operation_logs').insert({
+      operator_id: (req as any).user?.id || 'unknown',
+      type: 'notification_update',
+      target_type: 'notification',
+      target_id: id,
+      detail: `更新公告: ${existing.title}`,
+      created_at: new Date().toISOString()
+    });
+
+    res.json({ success: true, data: notification });
+  } catch (error) {
+    console.error('Update notification error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * PUT /api/admin/notifications/:id/status
+ * 切换公告状态
+ */
+router.put('/notifications/:id/status', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    if (!['published', 'draft'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'INVALID_PARAMS', message: '状态值无效' }
+      });
+    }
+
+    const { data: existing } = await supabaseAdmin
+      .from('notifications')
+      .select('id, title, status')
+      .eq('id', id)
+      .single();
+
+    if (!existing) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: '公告不存在' }
+      });
+    }
+
+    const { error } = await supabaseAdmin
+      .from('notifications')
+      .update({ status })
+      .eq('id', id);
+
+    if (error) {
+      console.error('Update notification status error:', error);
+      return res.status(500).json({
+        success: false,
+        error: { code: 'UPDATE_ERROR', message: '更新失败' }
+      });
+    }
+
+    await supabaseAdmin.from('operation_logs').insert({
+      operator_id: (req as any).user?.id || 'unknown',
+      type: 'notification_status_change',
+      target_type: 'notification',
+      target_id: id,
+      detail: `公告状态: ${existing.status} → ${status}`,
+      created_at: new Date().toISOString()
+    });
+
+    res.json({ success: true, message: '状态已更新' });
+  } catch (error) {
+    console.error('Update notification status error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * DELETE /api/admin/notifications/:id
+ * 删除公告
+ */
+router.delete('/notifications/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const { data: existing } = await supabaseAdmin
+      .from('notifications')
+      .select('id, title')
+      .eq('id', id)
+      .single();
+
+    if (!existing) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: '公告不存在' }
+      });
+    }
+
+    const { error } = await supabaseAdmin
+      .from('notifications')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      console.error('Delete notification error:', error);
+      return res.status(500).json({
+        success: false,
+        error: { code: 'DELETE_ERROR', message: '删除失败' }
+      });
+    }
+
+    await supabaseAdmin.from('operation_logs').insert({
+      operator_id: (req as any).user?.id || 'unknown',
+      type: 'notification_delete',
+      target_type: 'notification',
+      target_id: id,
+      detail: `删除公告: ${existing.title}`,
+      created_at: new Date().toISOString()
+    });
+
+    res.json({ success: true, message: '删除成功' });
+  } catch (error) {
+    console.error('Delete notification error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+// ===========================================
+// 内容管理 - FAQ管理
+// ===========================================
+
+/**
+ * GET /api/admin/faqs
+ * 获取FAQ列表
+ */
+router.get('/faqs', async (req: Request, res: Response) => {
+  try {
+    const { keyword, category, page = 1, pageSize = 20 } = req.query;
+
+    let query = supabaseAdmin
+      .from('faqs')
+      .select('*', { count: 'exact' })
+      .order('sort_order', { ascending: true });
+
+    if (keyword) {
+      query = query.or(`question.ilike.%${sanitizeLikePattern(keyword as string)}%,answer.ilike.%${sanitizeLikePattern(keyword as string)}%`);
+    }
+    if (category) {
+      query = query.eq('category', category);
+    }
+
+    const pageNum = Math.max(1, parseInt(page as string) || 1);
+    const pageSizeNum = Math.min(100, Math.max(1, parseInt(pageSize as string) || 20));
+    const from = (pageNum - 1) * pageSizeNum;
+    const to = from + pageSizeNum - 1;
+
+    const { data: faqs, error, count } = await query.range(from, to);
+
+    if (error) {
+      console.error('Get faqs error:', error);
+      return res.status(500).json({
+        success: false,
+        error: { code: 'QUERY_ERROR', message: '查询失败' }
+      });
+    }
+
+    res.json({
+      success: true,
+      data: { list: faqs || [], total: count || 0, page: pageNum, pageSize: pageSizeNum }
+    });
+  } catch (error) {
+    console.error('Get faqs error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * POST /api/admin/faqs
+ * 创建FAQ
+ */
+router.post('/faqs', async (req: Request, res: Response) => {
+  try {
+    const { category, question, answer, sort_order, status } = req.body;
+
+    // 验证
+    if (!question || typeof question !== 'string' || question.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'INVALID_PARAMS', message: '问题不能为空' }
+      });
+    }
+    if (!answer || typeof answer !== 'string' || answer.trim().length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'INVALID_PARAMS', message: '回答不能为空' }
+      });
+    }
+
+    const sanitizedQuestion = escapeHtml(question.trim().slice(0, 500));
+    const sanitizedAnswer = escapeHtml(answer.trim().slice(0, 2000));
+    const sanitizedCategory = category ? escapeHtml(String(category).slice(0, 50)) : '其他问题';
+
+    const { data: faq, error } = await supabaseAdmin
+      .from('faqs')
+      .insert({
+        category: sanitizedCategory,
+        question: sanitizedQuestion,
+        answer: sanitizedAnswer,
+        sort_order: typeof sort_order === 'number' ? sort_order : 0,
+        status: status === 'hidden' ? 'hidden' : 'visible'
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Create faq error:', error);
+      return res.status(500).json({
+        success: false,
+        error: { code: 'CREATE_ERROR', message: '创建失败' }
+      });
+    }
+
+    await supabaseAdmin.from('operation_logs').insert({
+      operator_id: (req as any).user?.id || 'unknown',
+      type: 'faq_create',
+      target_type: 'faq',
+      target_id: faq.id,
+      detail: `创建FAQ: ${sanitizedQuestion.slice(0, 50)}...`,
+      created_at: new Date().toISOString()
+    });
+
+    res.json({ success: true, data: faq });
+  } catch (error) {
+    console.error('Create faq error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * PUT /api/admin/faqs/:id
+ * 更新FAQ
+ */
+router.put('/faqs/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { category, question, answer, sort_order } = req.body;
+
+    const { data: existing } = await supabaseAdmin
+      .from('faqs')
+      .select('id, question')
+      .eq('id', id)
+      .single();
+
+    if (!existing) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'FAQ不存在' }
+      });
+    }
+
+    const updateData: any = {};
+    if (category !== undefined) updateData.category = escapeHtml(String(category).slice(0, 50));
+    if (question !== undefined) {
+      if (!question || question.trim().length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'INVALID_PARAMS', message: '问题不能为空' }
+        });
+      }
+      updateData.question = escapeHtml(String(question).trim().slice(0, 500));
+    }
+    if (answer !== undefined) {
+      if (!answer || answer.trim().length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'INVALID_PARAMS', message: '回答不能为空' }
+        });
+      }
+      updateData.answer = escapeHtml(String(answer).trim().slice(0, 2000));
+    }
+    if (sort_order !== undefined) updateData.sort_order = parseInt(sort_order) || 0;
+
+    const { data: faq, error } = await supabaseAdmin
+      .from('faqs')
+      .update(updateData)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('Update faq error:', error);
+      return res.status(500).json({
+        success: false,
+        error: { code: 'UPDATE_ERROR', message: '更新失败' }
+      });
+    }
+
+    await supabaseAdmin.from('operation_logs').insert({
+      operator_id: (req as any).user?.id || 'unknown',
+      type: 'faq_update',
+      target_type: 'faq',
+      target_id: id,
+      detail: `更新FAQ: ${existing.question.slice(0, 50)}...`,
+      created_at: new Date().toISOString()
+    });
+
+    res.json({ success: true, data: faq });
+  } catch (error) {
+    console.error('Update faq error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * DELETE /api/admin/faqs/:id
+ * 删除FAQ
+ */
+router.delete('/faqs/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const { data: existing } = await supabaseAdmin
+      .from('faqs')
+      .select('id, question')
+      .eq('id', id)
+      .single();
+
+    if (!existing) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NOT_FOUND', message: 'FAQ不存在' }
+      });
+    }
+
+    const { error } = await supabaseAdmin
+      .from('faqs')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      console.error('Delete faq error:', error);
+      return res.status(500).json({
+        success: false,
+        error: { code: 'DELETE_ERROR', message: '删除失败' }
+      });
+    }
+
+    await supabaseAdmin.from('operation_logs').insert({
+      operator_id: (req as any).user?.id || 'unknown',
+      type: 'faq_delete',
+      target_type: 'faq',
+      target_id: id,
+      detail: `删除FAQ: ${existing.question.slice(0, 50)}...`,
+      created_at: new Date().toISOString()
+    });
+
+    res.json({ success: true, message: '删除成功' });
+  } catch (error) {
+    console.error('Delete faq error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+// ===========================================
+// 内容管理 - 招募页配置
+// ===========================================
+
+/**
+ * GET /api/admin/recruit-settings
+ * 获取招募页配置
+ */
+router.get('/recruit-settings', async (req: Request, res: Response) => {
+  try {
+    const { data: settings } = await supabaseAdmin
+      .from('settings')
+      .select('key, value')
+      .like('key', 'recruit_%');
+
+    const config: Record<string, any> = {
+      title: '成为我们的合伙人',
+      description: '加入我们，共享财富盛宴。名酒商城为您提供优质的货源、丰厚的佣金和全方位的支持。',
+      imageUrl: 'https://images.unsplash.com/photo-1556761175-5973dc0f32d7?auto=format&fit=crop&q=80&w=1200',
+      benefits: [
+        '高额佣金回报',
+        '专属客服支持',
+        '定期培训指导',
+        '一件代发，零库存压力'
+      ]
+    };
+
+    settings?.forEach(s => {
+      try {
+        const key = s.key.replace('recruit_', '');
+        config[key] = JSON.parse(s.value);
+      } catch {
+        // ignore
+      }
+    });
+
+    res.json({ success: true, data: config });
+  } catch (error) {
+    console.error('Get recruit settings error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * PUT /api/admin/recruit-settings
+ * 更新招募页配置
+ */
+router.put('/recruit-settings', async (req: Request, res: Response) => {
+  try {
+    const { title, description, imageUrl, benefits } = req.body;
+
+    const updates: Array<{ key: string; value: string }> = [];
+
+    if (title !== undefined) {
+      updates.push({ key: 'recruit_title', value: JSON.stringify(escapeHtml(String(title).slice(0, 200))) });
+    }
+    if (description !== undefined) {
+      updates.push({ key: 'recruit_description', value: JSON.stringify(escapeHtml(String(description).slice(0, 2000))) });
+    }
+    if (imageUrl !== undefined) {
+      updates.push({ key: 'recruit_imageUrl', value: JSON.stringify(String(imageUrl).slice(0, 500)) });
+    }
+    if (benefits !== undefined && Array.isArray(benefits)) {
+      const sanitizedBenefits = benefits.map(b => escapeHtml(String(b).slice(0, 100))).slice(0, 10);
+      updates.push({ key: 'recruit_benefits', value: JSON.stringify(sanitizedBenefits) });
+    }
+
+    if (updates.length > 0) {
+      const records = updates.map(u => ({ key: u.key, value: u.value }));
+      const { error } = await supabaseAdmin
+        .from('settings')
+        .upsert(records, { onConflict: 'key' });
+
+      if (error) {
+        console.error('Update recruit settings error:', error);
+        return res.status(500).json({
+          success: false,
+          error: { code: 'UPDATE_ERROR', message: '更新失败' }
+        });
+      }
+    }
+
+    await supabaseAdmin.from('operation_logs').insert({
+      operator_id: (req as any).user?.id || 'unknown',
+      type: 'recruit_settings_update',
+      target_type: 'settings',
+      target_id: 'recruit',
+      detail: '更新招募页配置',
+      created_at: new Date().toISOString()
+    });
+
+    res.json({ success: true, message: '配置已保存' });
+  } catch (error) {
+    console.error('Update recruit settings error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
 export default router;
