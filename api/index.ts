@@ -450,8 +450,8 @@ app.post('/addresses', async (req, res) => {
   }
 });
 
-// 购物车
-app.get('/cart', async (req, res) => {
+// 购物车 - 兼容两种路径
+const getCartHandler = async (req: any, res: any) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith('Bearer ')) {
@@ -472,10 +472,10 @@ app.get('/cart', async (req, res) => {
   } catch (e: any) {
     res.status(500).json({ success: false, error: e.message });
   }
-});
+};
 
-// 添加购物车
-app.post('/cart', async (req, res) => {
+// 添加购物车 - 兼容两种路径
+const addCartHandler = async (req: any, res: any) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith('Bearer ')) {
@@ -487,16 +487,28 @@ app.post('/cart', async (req, res) => {
 
     const { product_id, quantity = 1, spec } = req.body;
 
+    if (!product_id) {
+      return res.status(400).json({ success: false, error: '缺少商品ID' });
+    }
+
     const supabase = await getSupabase();
 
-    // 检查库存
-    const { data: product } = await supabase
+    // 检查商品库存
+    const { data: product, error: productError } = await supabase
       .from('products')
-      .select('stock')
+      .select('id, stock, status')
       .eq('id', product_id)
       .single();
 
-    if (!product || product.stock < quantity) {
+    if (productError || !product) {
+      return res.status(400).json({ success: false, error: '商品不存在' });
+    }
+
+    if (product.status !== 'on_shelves') {
+      return res.status(400).json({ success: false, error: '商品已下架' });
+    }
+
+    if (product.stock < quantity) {
       return res.status(400).json({ success: false, error: '库存不足' });
     }
 
@@ -518,13 +530,18 @@ app.post('/cart', async (req, res) => {
     if (existing && existing.length > 0) {
       // 更新数量
       const newQty = existing[0].quantity + quantity;
-      await supabase
+      if (newQty > product.stock) {
+        return res.status(400).json({ success: false, error: '库存不足' });
+      }
+      const { error: updateError } = await supabase
         .from('cart_items')
         .update({ quantity: newQty })
         .eq('id', existing[0].id);
+
+      if (updateError) throw updateError;
     } else {
       // 新增
-      await supabase
+      const { error: insertError } = await supabase
         .from('cart_items')
         .insert({
           user_id: decoded.userId,
@@ -533,13 +550,83 @@ app.post('/cart', async (req, res) => {
           spec,
           selected: true
         });
+
+      if (insertError) throw insertError;
     }
 
     res.json({ success: true, message: '已添加到购物车' });
   } catch (e: any) {
+    console.error('Add to cart error:', e);
     res.status(500).json({ success: false, error: e.message });
   }
-});
+};
+
+// 更新购物车
+const updateCartHandler = async (req: any, res: any) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+      return res.status(401).json({ success: false, error: '未登录' });
+    }
+
+    const token = authHeader.substring(7);
+    const decoded = jwt.verify(token, getJwtSecret()) as { userId: string };
+    const { id } = req.params;
+    const { quantity, selected } = req.body;
+
+    const supabase = await getSupabase();
+    const updateData: any = {};
+    if (quantity !== undefined) updateData.quantity = quantity;
+    if (selected !== undefined) updateData.selected = selected;
+
+    const { error } = await supabase
+      .from('cart_items')
+      .update(updateData)
+      .eq('id', id)
+      .eq('user_id', decoded.userId);
+
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+};
+
+// 删除购物车项
+const deleteCartHandler = async (req: any, res: any) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+      return res.status(401).json({ success: false, error: '未登录' });
+    }
+
+    const token = authHeader.substring(7);
+    const decoded = jwt.verify(token, getJwtSecret()) as { userId: string };
+    const { id } = req.params;
+
+    const supabase = await getSupabase();
+    const { error } = await supabase
+      .from('cart_items')
+      .delete()
+      .eq('id', id)
+      .eq('user_id', decoded.userId);
+
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+};
+
+// 注册两种路径
+app.get('/cart', getCartHandler);
+app.get('/orders/cart', getCartHandler);
+app.post('/cart', addCartHandler);
+app.post('/orders/cart', addCartHandler);
+app.put('/cart/:id', updateCartHandler);
+app.put('/orders/cart/:id', updateCartHandler);
+app.delete('/cart/:id', deleteCartHandler);
+app.delete('/orders/cart/:id', deleteCartHandler);
 
 // 订单列表
 app.get('/orders', async (req, res) => {
