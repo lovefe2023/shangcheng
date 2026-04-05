@@ -653,6 +653,464 @@ app.get('/orders', async (req, res) => {
   }
 });
 
+// ============================================
+// 后台管理 API
+// ============================================
+
+// 检查管理员权限
+const checkAdmin = async (req: any, res: any): Promise<string | null> => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) {
+    res.status(401).json({ success: false, error: '未登录' });
+    return null;
+  }
+
+  try {
+    const token = authHeader.substring(7);
+    const decoded = jwt.verify(token, getJwtSecret()) as { userId: string };
+
+    const supabase = await getSupabase();
+    const { data: user } = await supabase
+      .from('users')
+      .select('phone')
+      .eq('id', decoded.userId)
+      .single();
+
+    if (!user) {
+      res.status(401).json({ success: false, error: '用户不存在' });
+      return null;
+    }
+
+    const adminPhones = (process.env.ADMIN_PHONES || '').split(',').filter(p => p.trim());
+    if (!adminPhones.includes(user.phone)) {
+      res.status(403).json({ success: false, error: '无管理员权限' });
+      return null;
+    }
+
+    return decoded.userId;
+  } catch {
+    res.status(401).json({ success: false, error: '登录已过期' });
+    return null;
+  }
+};
+
+// 后台仪表盘
+app.get('/admin/dashboard', async (req, res) => {
+  const userId = await checkAdmin(req, res);
+  if (!userId) return;
+
+  try {
+    const supabase = await getSupabase();
+
+    // 并行获取统计数据
+    const [usersCount, productsCount, ordersCount, revenueResult] = await Promise.all([
+      supabase.from('users').select('id', { count: 'exact', head: true }),
+      supabase.from('products').select('id', { count: 'exact', head: true }),
+      supabase.from('orders').select('id', { count: 'exact', head: true }),
+      supabase.from('orders').select('paid_amount').eq('status', 'completed')
+    ]);
+
+    const totalRevenue = revenueResult.data?.reduce((sum: number, o: any) => sum + (o.paid_amount || 0), 0) || 0;
+
+    res.json({
+      success: true,
+      data: {
+        usersCount: usersCount.count || 0,
+        productsCount: productsCount.count || 0,
+        ordersCount: ordersCount.count || 0,
+        totalRevenue
+      }
+    });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// 后台商品列表
+app.get('/admin/products', async (req, res) => {
+  const userId = await checkAdmin(req, res);
+  if (!userId) return;
+
+  try {
+    const supabase = await getSupabase();
+    const page = parseInt(req.query.page as string) || 1;
+    const pageSize = parseInt(req.query.pageSize as string) || 20;
+    const keyword = req.query.keyword as string;
+    const status = req.query.status as string;
+
+    let query = supabase
+      .from('products')
+      .select('*', { count: 'exact' });
+
+    if (keyword) {
+      query = query.or(`name.ilike.%${keyword}%,description.ilike.%${keyword}%`);
+    }
+    if (status) {
+      query = query.eq('status', status);
+    }
+
+    const { data, error, count } = await query
+      .order('created_at', { ascending: false })
+      .range((page - 1) * pageSize, page * pageSize - 1);
+
+    if (error) throw error;
+    res.json({ success: true, data: { list: data, total: count } });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// 后台添加商品
+app.post('/admin/products', async (req, res) => {
+  const userId = await checkAdmin(req, res);
+  if (!userId) return;
+
+  try {
+    const supabase = await getSupabase();
+    const productData = req.body;
+
+    const { data, error } = await supabase
+      .from('products')
+      .insert(productData)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// 后台更新商品
+app.put('/admin/products/:id', async (req, res) => {
+  const userId = await checkAdmin(req, res);
+  if (!userId) return;
+
+  try {
+    const supabase = await getSupabase();
+    const { id } = req.params;
+    const updateData = req.body;
+
+    const { data, error } = await supabase
+      .from('products')
+      .update(updateData)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// 后台删除商品
+app.delete('/admin/products/:id', async (req, res) => {
+  const userId = await checkAdmin(req, res);
+  if (!userId) return;
+
+  try {
+    const supabase = await getSupabase();
+    const { id } = req.params;
+
+    const { error } = await supabase
+      .from('products')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// 后台订单列表
+app.get('/admin/orders', async (req, res) => {
+  const userId = await checkAdmin(req, res);
+  if (!userId) return;
+
+  try {
+    const supabase = await getSupabase();
+    const page = parseInt(req.query.page as string) || 1;
+    const pageSize = parseInt(req.query.pageSize as string) || 20;
+    const status = req.query.status as string;
+    const keyword = req.query.keyword as string;
+
+    let query = supabase
+      .from('orders')
+      .select('*, user:users(id, name, phone)', { count: 'exact' });
+
+    if (status) {
+      query = query.eq('status', status);
+    }
+    if (keyword) {
+      query = query.or(`order_no.ilike.%${keyword}%`);
+    }
+
+    const { data, error, count } = await query
+      .order('created_at', { ascending: false })
+      .range((page - 1) * pageSize, page * pageSize - 1);
+
+    if (error) throw error;
+    res.json({ success: true, data: { list: data, total: count } });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// 后台订单详情
+app.get('/admin/orders/:id', async (req, res) => {
+  const userId = await checkAdmin(req, res);
+  if (!userId) return;
+
+  try {
+    const supabase = await getSupabase();
+    const { id } = req.params;
+
+    const { data, error } = await supabase
+      .from('orders')
+      .select('*, items:order_items(*), user:users(id, name, phone)')
+      .eq('id', id)
+      .single();
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// 后台用户列表
+app.get('/admin/users', async (req, res) => {
+  const userId = await checkAdmin(req, res);
+  if (!userId) return;
+
+  try {
+    const supabase = await getSupabase();
+    const page = parseInt(req.query.page as string) || 1;
+    const pageSize = parseInt(req.query.pageSize as string) || 20;
+    const keyword = req.query.keyword as string;
+
+    let query = supabase
+      .from('users')
+      .select('id, phone, name, avatar, status, is_partner, partner_level, balance, created_at', { count: 'exact' });
+
+    if (keyword) {
+      query = query.or(`name.ilike.%${keyword}%,phone.ilike.%${keyword}%`);
+    }
+
+    const { data, error, count } = await query
+      .order('created_at', { ascending: false })
+      .range((page - 1) * pageSize, page * pageSize - 1);
+
+    if (error) throw error;
+    res.json({ success: true, data: { list: data, total: count } });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// 后台用户详情
+app.get('/admin/users/:id', async (req, res) => {
+  const userId = await checkAdmin(req, res);
+  if (!userId) return;
+
+  try {
+    const supabase = await getSupabase();
+    const { id } = req.params;
+
+    const { data, error } = await supabase
+      .from('users')
+      .select('id, phone, name, avatar, status, is_partner, partner_level, balance, total_income, invite_code, created_at')
+      .eq('id', id)
+      .single();
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// 后台分类列表
+app.get('/admin/categories', async (req, res) => {
+  const userId = await checkAdmin(req, res);
+  if (!userId) return;
+
+  try {
+    const supabase = await getSupabase();
+    const { data, error } = await supabase
+      .from('categories')
+      .select('*')
+      .order('sort_order');
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// 后台轮播图列表
+app.get('/admin/banners', async (req, res) => {
+  const userId = await checkAdmin(req, res);
+  if (!userId) return;
+
+  try {
+    const supabase = await getSupabase();
+    const { data, error } = await supabase
+      .from('banners')
+      .select('*')
+      .order('sort_order');
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// 后台添加轮播图
+app.post('/admin/banners', async (req, res) => {
+  const userId = await checkAdmin(req, res);
+  if (!userId) return;
+
+  try {
+    const supabase = await getSupabase();
+    const { data, error } = await supabase
+      .from('banners')
+      .insert(req.body)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// 后台更新轮播图
+app.put('/admin/banners/:id', async (req, res) => {
+  const userId = await checkAdmin(req, res);
+  if (!userId) return;
+
+  try {
+    const supabase = await getSupabase();
+    const { id } = req.params;
+
+    const { data, error } = await supabase
+      .from('banners')
+      .update(req.body)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// 后台删除轮播图
+app.delete('/admin/banners/:id', async (req, res) => {
+  const userId = await checkAdmin(req, res);
+  if (!userId) return;
+
+  try {
+    const supabase = await getSupabase();
+    const { id } = req.params;
+
+    const { error } = await supabase
+      .from('banners')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// 后台合伙人列表
+app.get('/admin/partners', async (req, res) => {
+  const userId = await checkAdmin(req, res);
+  if (!userId) return;
+
+  try {
+    const supabase = await getSupabase();
+    const page = parseInt(req.query.page as string) || 1;
+    const pageSize = parseInt(req.query.pageSize as string) || 20;
+
+    const { data, error, count } = await supabase
+      .from('users')
+      .select('id, phone, name, avatar, partner_level, balance, total_income, created_at', { count: 'exact' })
+      .eq('is_partner', true)
+      .order('created_at', { ascending: false })
+      .range((page - 1) * pageSize, page * pageSize - 1);
+
+    if (error) throw error;
+    res.json({ success: true, data: { list: data, total: count } });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// 后台提现列表
+app.get('/admin/withdrawals', async (req, res) => {
+  const userId = await checkAdmin(req, res);
+  if (!userId) return;
+
+  try {
+    const supabase = await getSupabase();
+    const page = parseInt(req.query.page as string) || 1;
+    const pageSize = parseInt(req.query.pageSize as string) || 20;
+
+    const { data, error, count } = await supabase
+      .from('withdrawals')
+      .select('*, user:users(id, name, phone)', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range((page - 1) * pageSize, page * pageSize - 1);
+
+    if (error) throw error;
+    res.json({ success: true, data: { list: data, total: count } });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// 后台营销活动列表
+app.get('/admin/marketing', async (req, res) => {
+  const userId = await checkAdmin(req, res);
+  if (!userId) return;
+
+  try {
+    const supabase = await getSupabase();
+
+    const [flashSales, groupBuys, coupons] = await Promise.all([
+      supabase.from('flash_sales').select('*, product:products(id, name)').limit(10),
+      supabase.from('group_buys').select('*, product:products(id, name)').limit(10),
+      supabase.from('coupons').select('*').limit(10)
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        flashSales: flashSales.data || [],
+        groupBuys: groupBuys.data || [],
+        coupons: coupons.data || []
+      }
+    });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // 404
 app.use((_req, res) => {
   res.status(404).json({ success: false, error: 'Not found' });
