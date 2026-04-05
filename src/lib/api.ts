@@ -5,7 +5,10 @@
 
 import type { RankReward, PeriodWeights, DisplaySettings } from '../pages/admin/AdminLeaderboard';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
+// 生产环境使用相对路径，开发环境使用环境变量或默认值
+const API_BASE_URL = import.meta.env.PROD
+  ? '/api'
+  : (import.meta.env.VITE_API_URL || 'http://localhost:5000/api');
 
 // 获取存储的 token
 const getToken = (): string | null => {
