@@ -3,9 +3,7 @@
  * 将 Express 应用适配为 Vercel 函数
  */
 
-import { config } from 'dotenv';
-config();
-
+import type { VercelRequest, VercelResponse } from '@vercel/node';
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -24,6 +22,9 @@ import uploadRoutes from '../server/routes/upload';
 
 // 创建 Express 应用
 const app = express();
+
+// 信任代理 - Vercel 使用代理
+app.set('trust proxy', 1);
 
 // 安全头部
 app.use(helmet({
@@ -96,10 +97,27 @@ app.use((err: Error, _req: any, res: any, _next: any) => {
     success: false,
     error: {
       code: 'INTERNAL_ERROR',
-      message: '服务器内部错误'
+      message: process.env.NODE_ENV === 'development' ? err.message : '服务器内部错误'
     }
   });
 });
 
-// Vercel Serverless Function 导出
-export default app;
+// Vercel Serverless Function handler
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  // 处理 OPTIONS 预检请求
+  if (req.method === 'OPTIONS') {
+    res.status(200).end();
+    return;
+  }
+
+  // 将请求传递给 Express 应用
+  return new Promise<void>((resolve, reject) => {
+    app(req as any, res as any, (err: Error) => {
+      if (err) {
+        reject(err);
+      } else {
+        resolve();
+      }
+    });
+  });
+}
