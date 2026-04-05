@@ -3,12 +3,8 @@
  * 将 Express 应用适配为 Vercel 函数
  */
 
-import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { config } from 'dotenv';
-import { resolve } from 'path';
-
-// 加载环境变量
-config({ path: resolve(process.cwd(), '.env') });
+config();
 
 import express from 'express';
 import cors from 'cors';
@@ -35,7 +31,7 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false
 }));
 
-// CORS 配置 - Vercel 需要更宽松的配置
+// CORS 配置
 app.use(cors({
   origin: '*',
   credentials: true,
@@ -105,7 +101,5 @@ app.use((err: Error, _req: any, res: any, _next: any) => {
   });
 });
 
-// Vercel Serverless Function handler
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-  return app(req as any, res as any);
-}
+// Vercel Serverless Function 导出
+export default app;
