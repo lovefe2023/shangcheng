@@ -1,123 +1,109 @@
 /**
  * Vercel Serverless Function 入口
- * 将 Express 应用适配为 Vercel 函数
  */
 
-import type { VercelRequest, VercelResponse } from '@vercel/node';
 import express from 'express';
 import cors from 'cors';
-import helmet from 'helmet';
-import compression from 'compression';
 
-// 导入路由
-import authRoutes from '../server/routes/auth';
-import productsRoutes from '../server/routes/products';
-import ordersRoutes from '../server/routes/orders';
-import partnersRoutes from '../server/routes/partners';
-import marketingRoutes from '../server/routes/marketing';
-import adminRoutes from '../server/routes/admin';
-import partnerPackagesRoutes from '../server/routes/partnerPackages';
-import cellarRoutes from '../server/routes/cellar';
-import uploadRoutes from '../server/routes/upload';
-
-// 创建 Express 应用
+// 简单测试
 const app = express();
-
-// 信任代理 - Vercel 使用代理
-app.set('trust proxy', 1);
-
-// 安全头部
-app.use(helmet({
-  contentSecurityPolicy: false,
-  crossOriginEmbedderPolicy: false
-}));
-
-// CORS 配置
-app.use(cors({
-  origin: '*',
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
-}));
-
-// 压缩响应
-app.use(compression());
-
-// JSON 解析
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+app.use(cors({ origin: '*' }));
+app.use(express.json());
 
 // 健康检查
 app.get('/health', (_req, res) => {
-  res.json({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV || 'production'
-  });
+  res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
-// 挂载路由
-app.use('/auth', authRoutes);
-app.use('/products', productsRoutes);
-app.use('/orders', ordersRoutes);
-app.use('/partner', partnersRoutes);
-app.use('/partner-packages', partnerPackagesRoutes);
-app.use('/cellar', cellarRoutes);
-app.use('/admin', adminRoutes);
-app.use('/upload', uploadRoutes);
+// 测试 Supabase 连接
+app.get('/test-db', async (_req, res) => {
+  try {
+    const { createClient } = await import('@supabase/supabase-js');
+    const url = process.env.VITE_SUPABASE_URL;
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-// 公开营销 API
-app.get('/coupons', marketingRoutes);
-app.post('/coupons/:id/claim', marketingRoutes);
-app.get('/my-coupons', marketingRoutes);
-app.get('/flash-sales', marketingRoutes);
-app.get('/group-buys', marketingRoutes);
-app.get('/banners', marketingRoutes);
-app.get('/notifications', marketingRoutes);
-app.get('/addresses', marketingRoutes);
-app.post('/addresses', marketingRoutes);
-app.put('/addresses/:id', marketingRoutes);
-app.delete('/addresses/:id', marketingRoutes);
-
-// 404 处理
-app.use((_req, res) => {
-  res.status(404).json({
-    success: false,
-    error: {
-      code: 'NOT_FOUND',
-      message: '请求的资源不存在'
+    if (!url || !key) {
+      return res.json({ error: 'Missing env vars', hasUrl: !!url, hasKey: !!key });
     }
-  });
-});
 
-// 全局错误处理
-app.use((err: Error, _req: any, res: any, _next: any) => {
-  console.error('Server Error:', err);
-  res.status(500).json({
-    success: false,
-    error: {
-      code: 'INTERNAL_ERROR',
-      message: process.env.NODE_ENV === 'development' ? err.message : '服务器内部错误'
-    }
-  });
-});
+    const supabase = createClient(url, key);
+    const { data, error } = await supabase.from('products').select('count').limit(1);
 
-// Vercel Serverless Function handler
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // 处理 OPTIONS 预检请求
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
+    res.json({ success: !error, data, error: error?.message });
+  } catch (e: any) {
+    res.json({ error: e.message });
   }
+});
 
-  // 将请求传递给 Express 应用
-  return new Promise<void>((resolve, reject) => {
-    app(req as any, res as any, (err: Error) => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve();
-      }
-    });
-  });
-}
+// 产品列表
+app.get('/products', async (req, res) => {
+  try {
+    const { createClient } = await import('@supabase/supabase-js');
+    const supabase = createClient(
+      process.env.VITE_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    );
+
+    const { data, error } = await supabase
+      .from('products')
+      .select('*')
+      .eq('status', 'on_shelves')
+      .order('created_at', { ascending: false })
+      .limit(20);
+
+    if (error) throw error;
+    res.json({ success: true, data: { list: data, total: data.length } });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// 轮播图
+app.get('/banners', async (_req, res) => {
+  try {
+    const { createClient } = await import('@supabase/supabase-js');
+    const supabase = createClient(
+      process.env.VITE_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    );
+
+    const { data, error } = await supabase
+      .from('banners')
+      .select('*')
+      .eq('status', 'visible')
+      .order('sort_order');
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// 秒杀活动
+app.get('/flash-sales', async (_req, res) => {
+  try {
+    const { createClient } = await import('@supabase/supabase-js');
+    const supabase = createClient(
+      process.env.VITE_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    );
+
+    const { data, error } = await supabase
+      .from('flash_sales')
+      .select('*, product:products(id, name, images, original_price)')
+      .eq('status', 'ongoing');
+
+    if (error) throw error;
+    res.json({ success: true, data });
+  } catch (e: any) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// 404
+app.use((_req, res) => {
+  res.status(404).json({ success: false, error: 'Not found' });
+});
+
+export default app;

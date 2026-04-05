@@ -1,25 +1,13 @@
 /**
- * Vercel 调试 API - 检查环境变量配置
+ * Vercel 调试 API - 简化版本
  */
 
-import type { VercelRequest, VercelResponse } from '@vercel/node';
-
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // 检查环境变量配置情况
-  const envCheck = {
-    VITE_SUPABASE_URL: !!process.env.VITE_SUPABASE_URL,
-    VITE_SUPABASE_ANON_KEY: !!process.env.VITE_SUPABASE_ANON_KEY,
-    SUPABASE_SERVICE_ROLE_KEY: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
-    JWT_SECRET: !!process.env.JWT_SECRET,
-    ADMIN_PHONES: !!process.env.ADMIN_PHONES,
-    // 显示 URL 的前缀（用于调试）
-    SUPABASE_URL_PREFIX: process.env.VITE_SUPABASE_URL?.substring(0, 30) + '...',
-  };
-
+export default function handler(req: any, res: any) {
   res.status(200).json({
-    status: 'debug',
+    status: 'ok',
     timestamp: new Date().toISOString(),
-    environmentVariables: envCheck,
-    nodeVersion: process.version,
+    hasSupabaseUrl: !!process.env.VITE_SUPABASE_URL,
+    hasServiceKey: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+    nodeVersion: process.version
   });
 }
