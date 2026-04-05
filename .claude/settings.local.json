@@ -20,7 +20,14 @@
       "Bash(python test_data_validation.py)",
       "Bash(taskkill /F /PID 31680 /PID 24664 /PID 46904)",
       "Bash(taskkill /F /PID 46904 /PID 24664 /PID 11912)",
-      "Bash(cmd:*)"
+      "Bash(cmd:*)",
+      "Bash(taskkill:*)",
+      "Bash(powershell:*)",
+      "Bash(python scripts/test_admin_order_details.py)",
+      "Bash(findstr \":5000.*LISTEN\")",
+      "Bash(npx kill-port:*)",
+      "Bash(npm install:*)",
+      "Bash(grep -n \"AdminDashboard\\\\|/admin$\\\\|/admin/\" D:/AI/shangcheng/src/App.tsx)"
     ]
   }
 }

@@ -42,11 +42,68 @@ export default function AdminWithdrawal() {
   const [total, setTotal] = useState(0);
   const pageSize = 10;
 
+  // Withdrawal settings
+  const [settingsLoading, setSettingsLoading] = useState(false);
+  const [minAmount, setMinAmount] = useState('10');
+  const [maxAmount, setMaxAmount] = useState('50000');
+  const [maxDailyCount, setMaxDailyCount] = useState('5');
+  const [feeRate, setFeeRate] = useState('0.3');
+  const [dailyLimit, setDailyLimit] = useState('100000');
+  const [auditEnabled, setAuditEnabled] = useState(true);
+
   useEffect(() => {
     if (activeTab === 'audit') {
       fetchWithdrawals();
+    } else if (activeTab === 'rules') {
+      fetchWithdrawalSettings();
     }
   }, [activeTab, page, statusFilter]);
+
+  const fetchWithdrawalSettings = async () => {
+    setSettingsLoading(true);
+    try {
+      const res = await adminApi.getWithdrawalSettings();
+      if (res.success && res.data) {
+        setMinAmount(String(res.data.min_amount || 10));
+        setMaxAmount(String(res.data.max_amount || 50000));
+        setMaxDailyCount(String(res.data.max_daily_count || 5));
+        setFeeRate(String((res.data.fee_rate || 0.003) * 100)); // Convert to percentage
+        setDailyLimit(String(res.data.daily_limit || 100000));
+        setAuditEnabled(res.data.audit_enabled !== false); // Default true
+      }
+    } catch (error) {
+      console.error('Get withdrawal settings error:', error);
+      toast.error('获取提现配置失败');
+    } finally {
+      setSettingsLoading(false);
+    }
+  };
+
+  const handleSaveSettings = async () => {
+    setSettingsLoading(true);
+    try {
+      const settings = {
+        min_amount: parseFloat(minAmount) || 10,
+        max_amount: parseFloat(maxAmount) || 50000,
+        max_daily_count: parseInt(maxDailyCount) || 5,
+        fee_rate: (parseFloat(feeRate) || 0.3) / 100, // Convert from percentage
+        daily_limit: parseFloat(dailyLimit) || 100000,
+        audit_enabled: auditEnabled
+      };
+
+      const res = await adminApi.updateWithdrawalSettings(settings);
+      if (res.success) {
+        toast.success('提现配置已保存');
+      } else {
+        toast.error(res.error?.message || '保存失败');
+      }
+    } catch (error) {
+      console.error('Save withdrawal settings error:', error);
+      toast.error('保存配置失败');
+    } finally {
+      setSettingsLoading(false);
+    }
+  };
 
   const fetchWithdrawals = async () => {
     setLoading(true);
@@ -295,18 +352,54 @@ export default function AdminWithdrawal() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="bg-slate-50 dark:bg-slate-900/50 p-5 rounded-xl border border-slate-100 dark:border-slate-700/50">
                   <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">最低提现金额 (元)</label>
-                  <input type="number" defaultValue={100} className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-sm outline-none focus:border-primary transition-colors" />
+                  <input
+                    type="number"
+                    value={minAmount}
+                    onChange={(e) => setMinAmount(e.target.value)}
+                    className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-sm outline-none focus:border-primary transition-colors"
+                  />
                   <p className="text-xs text-slate-500 mt-1.5">用户发起提现的最低金额限制。</p>
                 </div>
                 <div className="bg-slate-50 dark:bg-slate-900/50 p-5 rounded-xl border border-slate-100 dark:border-slate-700/50">
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">单次最高提现金额 (元)</label>
+                  <input
+                    type="number"
+                    value={maxAmount}
+                    onChange={(e) => setMaxAmount(e.target.value)}
+                    className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-sm outline-none focus:border-primary transition-colors"
+                  />
+                  <p className="text-xs text-slate-500 mt-1.5">用户单次提现的最高金额限制。</p>
+                </div>
+                <div className="bg-slate-50 dark:bg-slate-900/50 p-5 rounded-xl border border-slate-100 dark:border-slate-700/50">
                   <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">提现手续费比例 (%)</label>
-                  <input type="number" defaultValue={0} className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-sm outline-none focus:border-primary transition-colors" />
-                  <p className="text-xs text-slate-500 mt-1.5">提现时扣除的手续费比例，0表示免手续费。</p>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={feeRate}
+                    onChange={(e) => setFeeRate(e.target.value)}
+                    className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-sm outline-none focus:border-primary transition-colors"
+                  />
+                  <p className="text-xs text-slate-500 mt-1.5">提现时扣除的手续费比例，如0.3表示0.3%。</p>
                 </div>
                 <div className="bg-slate-50 dark:bg-slate-900/50 p-5 rounded-xl border border-slate-100 dark:border-slate-700/50">
                   <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">每日提现次数限制</label>
-                  <input type="number" defaultValue={1} className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-sm outline-none focus:border-primary transition-colors" />
+                  <input
+                    type="number"
+                    value={maxDailyCount}
+                    onChange={(e) => setMaxDailyCount(e.target.value)}
+                    className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-sm outline-none focus:border-primary transition-colors"
+                  />
                   <p className="text-xs text-slate-500 mt-1.5">每个用户每天最多可发起的提现次数。</p>
+                </div>
+                <div className="bg-slate-50 dark:bg-slate-900/50 p-5 rounded-xl border border-slate-100 dark:border-slate-700/50">
+                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">每日提现总额限制 (元)</label>
+                  <input
+                    type="number"
+                    value={dailyLimit}
+                    onChange={(e) => setDailyLimit(e.target.value)}
+                    className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-sm outline-none focus:border-primary transition-colors"
+                  />
+                  <p className="text-xs text-slate-500 mt-1.5">每个用户每天最多可提现的总金额。</p>
                 </div>
               </div>
             </div>
@@ -325,7 +418,12 @@ export default function AdminWithdrawal() {
                     <p className="text-xs text-slate-500 mt-1">开启后，所有提现申请需人工审核；关闭后，系统将自动打款至用户账户。</p>
                   </div>
                   <label className="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox" className="sr-only peer" defaultChecked />
+                    <input
+                      type="checkbox"
+                      className="sr-only peer"
+                      checked={auditEnabled}
+                      onChange={(e) => setAuditEnabled(e.target.checked)}
+                    />
                     <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer dark:bg-slate-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:border-slate-600 peer-checked:bg-primary"></div>
                   </label>
                 </div>
@@ -334,10 +432,11 @@ export default function AdminWithdrawal() {
 
             <div className="flex justify-end pt-4">
               <button
-                onClick={() => toast.success('配置已保存（本地）')}
-                className="px-6 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors shadow-sm"
+                onClick={handleSaveSettings}
+                disabled={settingsLoading}
+                className="px-6 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors shadow-sm disabled:opacity-50"
               >
-                保存配置
+                {settingsLoading ? '保存中...' : '保存配置'}
               </button>
             </div>
           </div>

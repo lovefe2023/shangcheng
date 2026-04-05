@@ -3500,6 +3500,58 @@ router.put('/leaderboard-settings', async (req: Request, res: Response) => {
 // ===========================================
 
 /**
+ * GET /api/admin/admins
+ * 获取管理员列表
+ */
+router.get('/admins', async (req: Request, res: Response) => {
+  try {
+    // 从环境变量获取管理员手机号列表
+    const adminPhones = process.env.ADMIN_PHONES?.split(',').map(p => p.trim()) || [];
+
+    if (adminPhones.length === 0) {
+      return res.json({
+        success: true,
+        data: { list: [], total: 0 }
+      });
+    }
+
+    // 查询管理员用户信息
+    const { data: admins, error } = await supabaseAdmin
+      .from('users')
+      .select('id, phone, name, status, created_at, updated_at')
+      .in('phone', adminPhones);
+
+    if (error) {
+      console.error('Get admins error:', error);
+      return res.status(500).json({
+        success: false,
+        error: { code: 'DATABASE_ERROR', message: '查询管理员失败' }
+      });
+    }
+
+    const formattedAdmins = (admins || []).map(admin => ({
+      id: admin.id,
+      phone: admin.phone,
+      name: admin.name || '管理员',
+      role: 'admin',
+      last_login: admin.updated_at ? new Date(admin.updated_at).toLocaleString('zh-CN') : '-',
+      status: admin.status || 'active'
+    }));
+
+    res.json({
+      success: true,
+      data: { list: formattedAdmins, total: formattedAdmins.length }
+    });
+  } catch (error) {
+    console.error('Get admins error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
  * GET /api/admin/settings
  * 获取系统设置
  */
@@ -3545,12 +3597,124 @@ router.get('/settings', async (req: Request, res: Response) => {
  */
 router.put('/settings', async (req: Request, res: Response) => {
   try {
+    const adminId = req.user?.id;
+    if (!adminId) {
+      return res.status(401).json({
+        success: false,
+        error: { code: 'UNAUTHORIZED', message: '未授权' }
+      });
+    }
+
     const settings = req.body;
 
+    // 允许的设置键名白名单
+    const ALLOWED_SETTINGS_KEYS = [
+      'site_name', 'customer_service_phone', 'site_logo', 'site_description', 'copyright',
+      'wechat_appid', 'wechat_appsecret',
+      'partner_pool_period', 'partner_pool_algorithm',
+      'withdrawal_min_amount', 'withdrawal_max_amount', 'withdrawal_max_daily_count',
+      'withdrawal_fee_rate', 'withdrawal_daily_limit', 'withdrawal_audit_enabled',
+      'partner_commission_junior', 'partner_commission_middle', 'partner_commission_senior',
+      'partner_referral_reward', 'partner_sales_commission_rate',
+      'partner_one_star_direct', 'partner_two_star_direct_one', 'partner_two_star_direct',
+      'partner_pool_inject_amount',
+      // 支付配置
+      'wechat_pay_mchid', 'wechat_pay_api_key', 'wechat_pay_enabled',
+      'alipay_appid', 'alipay_private_key', 'alipay_enabled',
+      // 消息模板配置
+      'msg_template_income', 'msg_template_upgrade', 'msg_template_withdraw',
+      'msg_template_order', 'msg_template_income_enabled', 'msg_template_upgrade_enabled',
+      'msg_template_withdraw_enabled', 'msg_template_order_enabled',
+      // 反作弊设置
+      'anticheat_ip_limit_enabled', 'anticheat_ip_limit_minutes', 'anticheat_ip_limit_count',
+      'anticheat_device_limit_enabled', 'anticheat_device_limit_count'
+    ];
+
+    // XSS 防护函数
+    const escapeHtml = (str: string): string => {
+      return str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    };
+
+    // 验证和清理每个设置项
+    const validSettings: Record<string, string> = {};
+    const changedKeys: string[] = [];
+
     for (const [key, value] of Object.entries(settings)) {
-      await supabaseAdmin
+      // 白名单检查
+      if (!ALLOWED_SETTINGS_KEYS.includes(key)) {
+        continue; // 跳过不允许的键
+      }
+
+      // 类型检查
+      if (value === null || value === undefined) {
+        continue;
+      }
+
+      let sanitizedValue: string;
+
+      // 根据键类型进行不同验证
+      if (key.includes('_enabled') || key.includes('_rate')) {
+        // 布尔值或小数值
+        sanitizedValue = String(value);
+      } else if (key.includes('_amount') || key.includes('_count') || key.includes('_minutes') ||
+                 key.includes('_reward') || key.includes('_rate') || key.includes('_limit')) {
+        // 数值验证
+        const numValue = Number(value);
+        if (isNaN(numValue)) {
+          continue;
+        }
+        if (key.includes('_amount') && numValue < 0) continue;
+        if (key.includes('_count') && (numValue < 0 || !Number.isInteger(numValue))) continue;
+        sanitizedValue = String(numValue);
+      } else {
+        // 字符串值 - XSS 防护和长度限制
+        const strValue = String(value);
+        if (strValue.length > 5000) {
+          continue; // 跳过超长字符串
+        }
+        sanitizedValue = escapeHtml(strValue);
+      }
+
+      validSettings[key] = sanitizedValue;
+      changedKeys.push(key);
+    }
+
+    // 批量更新设置
+    if (Object.keys(validSettings).length > 0) {
+      const upsertRecords = Object.entries(validSettings).map(([key, value]) => ({
+        key,
+        value
+      }));
+
+      const { error } = await supabaseAdmin
         .from('settings')
-        .upsert({ key, value: String(value) }, { onConflict: 'key' });
+        .upsert(upsertRecords, { onConflict: 'key' });
+
+      if (error) {
+        console.error('Upsert settings error:', error);
+        return res.status(500).json({
+          success: false,
+          error: { code: 'DATABASE_ERROR', message: '保存设置失败' }
+        });
+      }
+
+      // 记录操作日志
+      await supabaseAdmin
+        .from('operation_logs')
+        .insert({
+          admin_id: adminId,
+          action: 'UPDATE_SETTINGS',
+          target_type: 'settings',
+          details: {
+            changed_keys: changedKeys,
+            message: `更新系统设置: ${changedKeys.join(', ')}`
+          }
+        });
     }
 
     res.json({
@@ -3561,10 +3725,7 @@ router.put('/settings', async (req: Request, res: Response) => {
     console.error('Update settings error:', error);
     res.status(500).json({
       success: false,
-      error: {
-        code: 'SERVER_ERROR',
-        message: '服务器错误'
-      }
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
     });
   }
 });
@@ -3575,39 +3736,108 @@ router.put('/settings', async (req: Request, res: Response) => {
  */
 router.get('/operation-logs', async (req: Request, res: Response) => {
   try {
-    const { page = 1, pageSize = 20, operator, type, date } = req.query;
+    const { page = 1, pageSize = 20, operator, type, date, startDate, endDate } = req.query;
 
-    // 由于没有操作日志表，返回示例数据
-    // 在实际项目中应该从操作日志表查询
-    const logs = [
-      {
-        id: '1',
-        date: new Date().toISOString().replace('T', ' ').slice(0, 19),
-        operator: 'admin',
-        operator_id: 'admin',
-        type: '系统登录',
-        detail: '管理员登录系统',
-        ip: '127.0.0.1'
+    // 构建查询
+    let query = supabaseAdmin
+      .from('operation_logs')
+      .select(`
+        id,
+        created_at,
+        action,
+        target_type,
+        target_id,
+        details,
+        admin:users!admin_id(id, name, phone)
+      `, { count: 'exact' })
+      .order('created_at', { ascending: false });
+
+    // 日期筛选
+    if (date) {
+      const dateStr = String(date);
+      query = query.gte('created_at', `${dateStr} 00:00:00`)
+                   .lte('created_at', `${dateStr} 23:59:59`);
+    } else if (startDate || endDate) {
+      if (startDate) {
+        query = query.gte('created_at', `${String(startDate)} 00:00:00`);
       }
-    ];
+      if (endDate) {
+        query = query.lte('created_at', `${String(endDate)} 23:59:59`);
+      }
+    }
+
+    // 操作类型筛选
+    if (type) {
+      query = query.eq('action', String(type));
+    }
+
+    // 分页
+    const pageNum = parseInt(page as string) || 1;
+    const pageSizeNum = parseInt(pageSize as string) || 20;
+    const offset = (pageNum - 1) * pageSizeNum;
+
+    query = query.range(offset, offset + pageSizeNum - 1);
+
+    const { data: logs, error, count } = await query;
+
+    if (error) {
+      console.error('Get operation logs error:', error);
+      // 如果表不存在或查询失败，返回空列表
+      return res.json({
+        success: true,
+        data: {
+          list: [],
+          total: 0,
+          page: pageNum,
+          pageSize: pageSizeNum
+        }
+      });
+    }
+
+    // 获取管理员名称映射（用于 operator 筛选）
+    let filteredLogs = logs || [];
+
+    // 操作人筛选（需要先获取管理员信息）
+    if (operator && filteredLogs.length > 0) {
+      const operatorName = String(operator);
+      filteredLogs = filteredLogs.filter(log => {
+        const adminName = log.admin?.name || log.admin?.phone || '未知';
+        return adminName.includes(operatorName);
+      });
+    }
+
+    // 格式化返回数据
+    const formattedLogs = filteredLogs.map(log => ({
+      id: log.id,
+      date: log.created_at ? new Date(log.created_at).toLocaleString('zh-CN', {
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      }).replace(/\//g, '-') : '',
+      operator: log.admin?.name || log.admin?.phone || '未知',
+      operator_id: log.admin?.id || '',
+      type: log.action || '',
+      detail: log.details?.message || JSON.stringify(log.details || {}),
+      ip: log.details?.ip || '-'
+    }));
 
     res.json({
       success: true,
       data: {
-        list: logs,
-        total: logs.length,
-        page: parseInt(page as string) || 1,
-        pageSize: parseInt(pageSize as string) || 20
+        list: formattedLogs,
+        total: count || formattedLogs.length,
+        page: pageNum,
+        pageSize: pageSizeNum
       }
     });
   } catch (error) {
     console.error('Get operation logs error:', error);
     res.status(500).json({
       success: false,
-      error: {
-        code: 'SERVER_ERROR',
-        message: '服务器错误'
-      }
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
     });
   }
 });

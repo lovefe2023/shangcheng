@@ -190,3 +190,69 @@ export function PageLoadingSkeleton() {
     </div>
   );
 }
+
+// 详情页骨架屏（用于订单详情、用户详情等）
+export function DetailSkeleton() {
+  return (
+    <div className="max-w-5xl mx-auto pb-12">
+      {/* Header */}
+      <div className="flex items-center gap-4 mb-6">
+        <Skeleton className="w-10 h-10" rounded="lg" />
+        <Skeleton className="h-8 w-32" />
+        <Skeleton className="h-6 w-20" rounded="full" />
+        <Skeleton className="h-6 w-20" rounded="full" />
+      </div>
+
+      {/* Main content */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Left column */}
+        <div className="lg:col-span-2 space-y-6">
+          {/* Order info card */}
+          <div className="bg-white dark:bg-slate-800 rounded-xl p-6 shadow-sm border border-slate-200 dark:border-slate-700">
+            <Skeleton className="h-6 w-24 mb-6" />
+            <div className="grid grid-cols-2 gap-4">
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+              <Skeleton className="h-12 w-full" />
+            </div>
+          </div>
+
+          {/* Products card */}
+          <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700">
+            <Skeleton className="h-6 w-24 mx-6 mt-6 mb-4" />
+            <div className="p-6 space-y-4">
+              <div className="flex gap-4">
+                <Skeleton className="w-12 h-12" rounded="lg" />
+                <div className="flex-1">
+                  <Skeleton className="h-4 w-2/3 mb-2" />
+                  <Skeleton className="h-4 w-1/3" />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Right column */}
+        <div className="space-y-6">
+          <div className="bg-white dark:bg-slate-800 rounded-xl p-6 shadow-sm border border-slate-200 dark:border-slate-700">
+            <Skeleton className="h-6 w-24 mb-6" />
+            <div className="space-y-4">
+              <Skeleton className="h-8 w-full" />
+              <Skeleton className="h-8 w-full" />
+              <Skeleton className="h-12 w-full" />
+            </div>
+          </div>
+
+          <div className="bg-white dark:bg-slate-800 rounded-xl p-6 shadow-sm border border-slate-200 dark:border-slate-700">
+            <Skeleton className="h-6 w-24 mb-6" />
+            <div className="space-y-4">
+              <Skeleton className="h-16 w-full" />
+              <Skeleton className="h-16 w-full" />
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -53,7 +53,14 @@ export default function PartnerPackage() {
 
   const handleBuy = () => {
     if (!selectedPackage) return;
-    // 检查登录状态后跳转到结算页
+
+    // 检查登录状态
+    const token = localStorage.getItem('token');
+    if (!token) {
+      navigate('/login?redirect=' + encodeURIComponent(`/checkout?package_id=${selectedPackage.id}`));
+      return;
+    }
+
     navigate(`/checkout?package_id=${selectedPackage.id}`);
   };
 

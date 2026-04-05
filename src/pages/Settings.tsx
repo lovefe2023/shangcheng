@@ -2,6 +2,9 @@ import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { authApi } from '../lib/api';
 
+// 版本号从 package.json 读取
+const APP_VERSION = '1.0.0';
+
 interface User {
   id: string;
   name: string;
@@ -59,7 +62,7 @@ export default function Settings() {
       <main className="flex-1 overflow-y-auto pb-8">
         <div className="mt-4 px-4 space-y-4">
           <div className="bg-white dark:bg-slate-900 rounded-xl overflow-hidden border border-slate-100 dark:border-slate-800 shadow-sm">
-            <Link to="/settings/profile" className="px-4 py-3 flex items-center justify-between border-b border-slate-50 dark:border-slate-800/50 active:bg-slate-50 dark:active:bg-slate-800/50 transition-colors cursor-pointer">
+            <Link to="/personal-info" className="px-4 py-3 flex items-center justify-between border-b border-slate-50 dark:border-slate-800/50 active:bg-slate-50 dark:active:bg-slate-800/50 transition-colors cursor-pointer">
               <span className="text-slate-900 dark:text-slate-100 text-base">个人信息</span>
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-slate-500 dark:text-slate-400 font-medium overflow-hidden">
@@ -75,45 +78,33 @@ export default function Settings() {
             <Link to="/settings/account" className="px-4 py-3 flex items-center justify-between border-b border-slate-50 dark:border-slate-800/50 active:bg-slate-50 dark:active:bg-slate-800/50 transition-colors cursor-pointer">
               <span className="text-slate-900 dark:text-slate-100 text-base">账号与安全</span>
               <div className="flex items-center gap-2">
-                <span className="text-slate-400 text-sm">密码/绑定/注销</span>
+                <span className="text-slate-400 text-sm">密码/绑定</span>
                 <span className="material-symbols-outlined text-slate-400 text-xl">chevron_right</span>
               </div>
             </Link>
-            <div className="px-4 py-3 flex items-center justify-between active:bg-slate-50 dark:active:bg-slate-800/50 transition-colors cursor-pointer">
-              <span className="text-slate-900 dark:text-slate-100 text-base">支付设置</span>
+            <Link to="/addresses" className="px-4 py-3 flex items-center justify-between active:bg-slate-50 dark:active:bg-slate-800/50 transition-colors cursor-pointer">
+              <span className="text-slate-900 dark:text-slate-100 text-base">收货地址</span>
               <span className="material-symbols-outlined text-slate-400 text-xl">chevron_right</span>
-            </div>
+            </Link>
           </div>
 
           <div className="bg-white dark:bg-slate-900 rounded-xl overflow-hidden border border-slate-100 dark:border-slate-800 shadow-sm">
-            <div className="px-4 py-3 flex items-center justify-between border-b border-slate-50 dark:border-slate-800/50 active:bg-slate-50 dark:active:bg-slate-800/50 transition-colors cursor-pointer">
+            <Link to="/notifications" className="px-4 py-3 flex items-center justify-between border-b border-slate-50 dark:border-slate-800/50 active:bg-slate-50 dark:active:bg-slate-800/50 transition-colors cursor-pointer">
               <span className="text-slate-900 dark:text-slate-100 text-base">消息通知</span>
               <span className="material-symbols-outlined text-slate-400 text-xl">chevron_right</span>
-            </div>
-            <div className="px-4 py-3 flex items-center justify-between border-b border-slate-50 dark:border-slate-800/50 active:bg-slate-50 dark:active:bg-slate-800/50 transition-colors cursor-pointer">
-              <span className="text-slate-900 dark:text-slate-100 text-base">隐私设置</span>
+            </Link>
+            <Link to="/faq/commission" className="px-4 py-3 flex items-center justify-between border-b border-slate-50 dark:border-slate-800/50 active:bg-slate-50 dark:active:bg-slate-800/50 transition-colors cursor-pointer">
+              <span className="text-slate-900 dark:text-slate-100 text-base">帮助与常见问题</span>
               <span className="material-symbols-outlined text-slate-400 text-xl">chevron_right</span>
-            </div>
-            <div className="px-4 py-3 flex items-center justify-between active:bg-slate-50 dark:active:bg-slate-800/50 transition-colors cursor-pointer">
-              <span className="text-slate-900 dark:text-slate-100 text-base">通用设置</span>
-              <div className="flex items-center gap-2">
-                <span className="text-slate-400 text-sm">清除缓存/深色模式</span>
-                <span className="material-symbols-outlined text-slate-400 text-xl">chevron_right</span>
-              </div>
-            </div>
+            </Link>
           </div>
 
           <div className="bg-white dark:bg-slate-900 rounded-xl overflow-hidden border border-slate-100 dark:border-slate-800 shadow-sm">
-            <div className="px-4 py-3 flex items-center justify-between border-b border-slate-50 dark:border-slate-800/50 active:bg-slate-50 dark:active:bg-slate-800/50 transition-colors cursor-pointer">
+            <div className="px-4 py-3 flex items-center justify-between border-b border-slate-50 dark:border-slate-800/50">
               <span className="text-slate-900 dark:text-slate-100 text-base">关于我们</span>
               <div className="flex items-center gap-2">
-                <span className="text-slate-400 text-sm">v1.0.0</span>
-                <span className="material-symbols-outlined text-slate-400 text-xl">chevron_right</span>
+                <span className="text-slate-400 text-sm">v{APP_VERSION}</span>
               </div>
-            </div>
-            <div className="px-4 py-3 flex items-center justify-between active:bg-slate-50 dark:active:bg-slate-800/50 transition-colors cursor-pointer">
-              <span className="text-slate-900 dark:text-slate-100 text-base">帮助与客服</span>
-              <span className="material-symbols-outlined text-slate-400 text-xl">chevron_right</span>
             </div>
           </div>
 

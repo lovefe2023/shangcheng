@@ -6,3 +6,12 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Test files and screenshots
+test_*.png
+test_*.py
+test_screenshots/
+scripts/test_*.py
+
+# Uploads directory (user uploaded files)
+server/uploads/

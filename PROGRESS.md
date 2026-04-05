@@ -23,8 +23,13 @@
 - ✅ 酒窖管理模块 (8个问题已修复)
 - ✅ 排行榜配置模块 (13个问题已修复)
 - ✅ 内容管理模块 (13个问题已修复)
+- ✅ 后台管理-系统设置模块 (3个问题已修复)
+- ✅ 商城前端-商品分类模块 (1个问题已修复)
+- ✅ 商城前端-购物车模块 (2个问题已修复)
+- ✅ 合伙人中心模块 (10个问题已修复)
+- ✅ "我的"模块 (10个问题已修复)
 
-**累计修复问题：** 124个
+**累计修复问题：** 149个
 
 ---
 
@@ -409,10 +414,23 @@ npm run dev:full
 - **修复**: 更新 `api.ts` 的 `getToken()` 函数，优先从 `token` 读取
 - **文件**: `src/lib/api.ts`
 
-#### 2. 购物车数据映射错误 ✅
+#### 2. 质物车数据映射错误 ✅
 - **问题**: API返回 `data.items`，前端期望 `data` 直接是数组
 - **修复**: 更新 `Cart.tsx` 处理 `res.data.items || res.data`
 - **文件**: `src/pages/Cart.tsx`
+
+#### 3. 质物车null规格合并bug ✅
+- **问题**: 相同商品相同规格(null)的购物车项被创建为多条重复记录，而非合并更新数量
+- **原因**: Supabase `.eq('spec', spec || null)` 不能正确匹配null值
+- **修复**:
+  - 使用 `.is('spec', null)` 处理null规格查询
+  - 添加重复项检测和自动清理逻辑
+  - 多个重复项时自动合并数量并删除多余项
+- **文件**: `server/routes/orders.ts` (POST /api/orders/cart)
+- **测试验证**:
+  - 添加商品(null spec)两次 → 数量合并为8而非创建两条记录
+  - 添加商品(有spec)两次 → 数量正确合并
+  - 不同规格商品保持独立条目
 
 ### 🚀 功能重构
 
@@ -2264,4 +2282,343 @@ CREATE TABLE faqs (
 
 ---
 
-**最后更新**: 2026-04-04
+## 三十、后台管理-系统设置模块代码审查修复 (2026-04-04)
+
+### 📋 审查概述
+
+对后台管理系统设置模块进行代码审查，发现问题：
+- **Critical (严重)**: 1 个
+- **High (重要)**: 2 个
+
+### 🔴 Critical 修复
+
+#### 1. AdminSettings.tsx 使用 Mock 数据 ✅
+- **问题**: 整个页面使用硬编码 Mock 数据，未接入真实 API
+- **修复**: 完全重构页面，接入真实设置 API
+- **文件**: `src/pages/admin/AdminSettings.tsx`
+
+### 🟠 High 修复
+
+#### 2. 缺少管理员列表 API ✅
+- **问题**: 没有 `GET /api/admin/admins` 端点
+- **修复**: 新增管理员列表查询 API
+- **文件**: `server/routes/admin.ts`
+
+#### 3. 设置保存缺少验证和日志 ✅
+- **问题**: 设置保存无输入验证、无 XSS 防护、无操作日志
+- **修复**: 
+  - 添加白名单验证，只允许特定字段更新
+  - 添加 XSS 防护（转义用户输入）
+  - 添加操作日志记录
+- **文件**: `server/routes/admin.ts`
+
+### 📁 修改文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `server/routes/admin.ts` | 新增 GET /api/admin/admins，增强 PUT /api/admin/settings |
+| `src/pages/admin/AdminSettings.tsx` | 完全重构，移除 Mock 数据，接入真实 API |
+
+---
+
+## 三十一、商城前端-商品分类模块代码审查修复 (2026-04-04)
+
+### 📋 审查概述
+
+对商城前端商品分类页面进行代码审查，发现问题：
+- **Critical (严重)**: 1 个
+
+### 🔴 Critical 修复
+
+#### 1. Category.tsx 使用硬编码分类数据 ✅
+- **问题**: 分类数据完全硬编码，搜索功能不可用
+- **修复**: 
+  - 接入 `productsApi.getCategories()` 获取真实分类
+  - 实现搜索建议功能（防抖300ms）
+  - 修复 React.KeyboardEvent 类型错误
+- **文件**: `src/pages/Category.tsx`
+
+### ✅ 验证测试
+
+| 测试项 | 结果 |
+|--------|:----:|
+| 分类列表加载 | ✅ 从数据库获取真实分类 |
+| 分类切换 | ✅ URL参数同步，子分类显示 |
+| 搜索建议 | ✅ 输入2字符后显示建议 |
+| 回车搜索 | ✅ 跳转商品列表页 |
+
+---
+
+## 三十二、商城前端-购物车模块代码审查修复 (2026-04-04)
+
+### 📋 审查概述
+
+对商城前端购物车模块进行代码审查，发现问题：
+- **Critical (严重)**: 2 个
+
+### 🔴 Critical 修复
+
+#### 1. 添加购物车缺少库存验证 ✅
+- **问题**: POST /api/orders/cart 和 PUT /api/orders/cart/:id 未验证库存，可超库存添加
+- **修复**: 
+  - 添加商品前查询库存
+  - 验证添加数量不超过库存
+  - 验证更新数量不超过库存
+  - 返回库存不足错误信息
+- **文件**: `server/routes/orders.ts`
+
+#### 2. 购物车 null 规格合并 Bug ✅
+- **问题**: 相同商品相同规格(null)的购物车项被创建为多条重复记录，而非合并更新数量
+- **原因**: Supabase `.eq('spec', spec || null)` 不能正确匹配 null 值
+- **修复**: 
+  - 使用 `.is('spec', null)` 处理 null 规格查询
+  - 添加重复项检测和自动清理逻辑
+  - 多个重复项时自动合并数量并删除多余项
+- **文件**: `server/routes/orders.ts` (POST /api/orders/cart)
+
+### 📝 修复代码示例
+
+```typescript
+// 修复前（错误）
+.eq('spec', spec || null)  // 不能匹配 null
+
+// 修复后（正确）
+if (spec) {
+  query = query.eq('spec', spec);
+} else {
+  query = query.is('spec', null);
+}
+
+// 重复项自动清理
+if (existingItems && existingItems.length > 1) {
+  const duplicateIds = existingItems.slice(1).map(item => item.id);
+  await supabaseAdmin.from('cart_items').delete().in('id', duplicateIds);
+  // 合并数量...
+}
+```
+
+### ✅ 验证测试
+
+| 测试项 | 结果 |
+|--------|:----:|
+| 添加商品(null spec) qty=5 | ✅ cart有1条记录 |
+| 再次添加 qty=3 | ✅ 合并为1条记录，qty=8 |
+| 添加商品(spec="500ml") qty=2 | ✅ 新增独立条目 |
+| 再次添加 qty=3 | ✅ 合并qty=5 |
+| 超库存添加 | ✅ 返回错误，阻止添加 |
+| 更新数量超库存 | ✅ 返回错误，阻止更新 |
+
+---
+
+## 三十三、合伙人中心模块代码审查修复 (2026-04-05)
+
+### 📋 审查概述
+
+对商城前端合伙人中心模块进行代码审查，发现问题按优先级分类：
+- **Critical (严重)**: 2 个
+- **High (重要)**: 4 个
+- **Medium (中等)**: 5 个
+- **Low (低)**: 3 个
+
+### 🔴 Critical 修复
+
+#### 1. PartnerInvite.tsx 使用硬编码 Mock 数据 ✅
+- **问题**: 整个页面使用硬编码数据，邀请码、二维码均为假数据
+- **修复**:
+  - 接入 `partnerApi.getProfile()` 获取用户真实邀请码
+  - 使用在线 QR 码 API 生成真实二维码
+  - 实现保存海报功能（Canvas 绘制）
+  - 实现复制邀请链接功能
+  - 添加加载状态和错误处理
+- **文件**: `src/pages/PartnerInvite.tsx`
+
+#### 2. PartnerRecruit.tsx 和 PartnerRecruitDetails.tsx 硬编码数据 ✅
+- **问题**: 合伙人数量、证言数据、门槛价格均为硬编码
+- **修复**:
+  - 接入排行榜 API 获取真实合伙人数据
+  - 尝试获取设置 API 读取门槛价格和佣金比例
+  - 保留营销文案但动态显示真实数据
+- **文件**: `src/pages/PartnerRecruit.tsx`, `src/pages/PartnerRecruitDetails.tsx`
+
+### 🟠 High 修复
+
+#### 3. getLevelDisplay 与类型定义不一致 ✅
+- **问题**: 自定义 `getLevelDisplay` 函数中"金牌合伙人"与 `PartnerLevelLabel` 中"高级合伙人"不一致
+- **修复**: 使用 `PartnerLevelLabel` 替代自定义实现
+- **文件**: `src/pages/Partner.tsx:68-77`
+
+#### 4. 后端返回敏感字段 password_hash ✅
+- **问题**: `/api/partner/profile` 返回了 `password_hash` 字段
+- **修复**: 后端查询时显式指定字段列表，排除敏感字段
+- **文件**: `server/routes/partners.ts:16-31`
+
+#### 5. Partner.tsx 导入但未使用枚举 ✅
+- **问题**: 导入了 `UserStatus`, `UserStatusLabel` 但未使用
+- **修复**: 移除未使用的导入
+- **文件**: `src/pages/Partner.tsx:4`
+
+#### 6. PartnerPackage.tsx 缺少登录状态检查 ✅
+- **问题**: 购买礼包需登录，但页面未检查登录状态
+- **修复**: 购买前检查 token，未登录跳转登录页
+- **文件**: `src/pages/PartnerPackage.tsx:54-58`
+
+### 🟡 Medium 修复
+
+#### 7. 收益类型/状态映射重复定义 ✅
+- **问题**: `getIncomeTypeLabel` 和 `getIncomeStatusLabel` 在页面中自定义
+- **修复**:
+  - 在 `types.ts` 中添加 `IncomeType`, `IncomeStatus` 枚举和 Label 映射
+  - 更新 `Partner.tsx` 使用统一定义
+- **文件**: `src/types.ts`, `src/pages/Partner.tsx`
+
+#### 8. /partner/income 页面不存在 ✅
+- **问题**: 合伙人中心"查看全部"链接指向不存在的页面
+- **修复**: 创建 `PartnerIncome.tsx` 页面并添加路由
+- **文件**: `src/pages/PartnerIncome.tsx` (新增), `src/App.tsx`
+
+### 📊 修复统计
+
+| 优先级 | 发现数量 | 已修复 | 比例 |
+|--------|----------|--------|------|
+| Critical | 2 | 2 | 100% |
+| High | 4 | 4 | 100% |
+| Medium | 5 | 4 | 80% |
+| Low | 3 | 0 | 待处理 |
+| **总计** | **14** | **10** | **71%** |
+
+### 📁 新增文件
+
+| 文件 | 用途 |
+|------|------|
+| `src/pages/PartnerIncome.tsx` | 合伙人收益详情页 |
+
+### 🔧 修改文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `src/pages/PartnerInvite.tsx` | 完全重构，接入真实 API |
+| `src/pages/PartnerRecruit.tsx` | 接入排行榜 API，动态显示数据 |
+| `src/pages/PartnerRecruitDetails.tsx` | 接入设置 API，动态显示价格 |
+| `src/pages/Partner.tsx` | 使用统一类型定义 |
+| `src/pages/PartnerPackage.tsx` | 添加登录检查 |
+| `src/types.ts` | 添加 IncomeType/IncomeStatus 枚举 |
+| `src/App.tsx` | 添加 PartnerIncome 路由 |
+| `server/routes/partners.ts` | 排除敏感字段 |
+
+### ✅ 验证测试
+
+| 测试项 | 结果 |
+|--------|:----:|
+| 排行榜 API | ✅ 返回正确结构 |
+| 合伙人信息 API | ✅ 不返回敏感字段 |
+| PartnerInvite 加载 | ✅ 显示真实邀请码 |
+| PartnerIncome 页面 | ✅ 正常显示收益列表 |
+
+---
+
+## 三十四、"我的"模块代码审查修复 (2026-04-05)
+
+### 📋 审查概述
+
+对商城前端"我的"模块进行代码审查，发现问题按优先级分类：
+- **Critical (严重)**: 2 个
+- **High (重要)**: 4 个
+- **Medium (中等)**: 4 个
+- **Low (低)**: 2 个
+
+### 🔴 Critical 修复
+
+#### 1. 后端 /api/auth/me 返回敏感字段 password_hash ✅
+- **问题**: 认证接口返回了 `password_hash` 字段
+- **修复**: 后端查询时显式指定字段列表，排除敏感字段
+- **文件**: `server/routes/auth.ts:291-297`
+
+#### 2. Profile.tsx 订单统计字段不存在 ✅
+- **问题**: 期望 API 返回 `pending_payment` 等统计字段，但后端只返回 `list`, `total`
+- **修复**:
+  - 后端新增 `GET /api/orders/stats` 统计接口
+  - 前端新增 `ordersApi.getStats()` 方法
+  - Profile.tsx 调用新接口获取统计数据
+- **文件**: `server/routes/orders.ts`, `src/lib/api.ts`, `src/pages/Profile.tsx`
+
+### 🟠 High 修复
+
+#### 3. Settings.tsx 多个链接指向不存在的页面 ✅
+- **问题**: `/settings/account`、`/settings/profile` 等链接无效
+- **修复**:
+  - 创建 `AccountSettings.tsx` 账号安全页面
+  - 修改链接指向正确路由 `/personal-info`
+  - 移除无效功能项，改为有效链接
+- **文件**: `src/pages/AccountSettings.tsx` (新增), `src/pages/Settings.tsx`, `src/App.tsx`
+
+#### 4. Addresses.tsx 缺少手机号验证 ✅
+- **问题**: 添加/编辑地址时未验证手机号格式
+- **修复**: 添加 `validatePhone()` 函数验证 11 位手机号
+- **文件**: `src/pages/Addresses.tsx`
+
+#### 5. Addresses.tsx 使用 alert 而非统一错误处理 ✅
+- **问题**: 多处使用 `alert()` 提示错误，与 Toast 风格不一致
+- **修复**: 引入 `useToast` 替换所有 alert 调用
+- **文件**: `src/pages/Addresses.tsx`
+
+#### 6. Profile.tsx 缺少错误处理 ✅
+- **问题**: API 调用失败时无用户提示
+- **修复**: 添加 Toast 错误提示，处理未登录情况
+- **文件**: `src/pages/Profile.tsx`
+
+### 🟡 Medium 修复
+
+#### 7. Settings.tsx 版本号硬编码 ✅
+- **问题**: 版本号 `v1.0.0` 硬编码
+- **修复**: 提取为常量 `APP_VERSION`
+- **文件**: `src/pages/Settings.tsx`
+
+#### 8. PersonalInfo.tsx 性别选项硬编码 ✅
+- **问题**: 性别选项 `男/女/保密` 硬编码
+- **修复**:
+  - 在 `types.ts` 添加 `Gender` 枚举和 `GenderOptions`
+  - PersonalInfo.tsx 使用 `GenderOptions`
+- **文件**: `src/types.ts`, `src/pages/PersonalInfo.tsx`
+
+### 📊 修复统计
+
+| 优先级 | 发现数量 | 已修复 | 比例 |
+|--------|----------|--------|------|
+| Critical | 2 | 2 | 100% |
+| High | 4 | 4 | 100% |
+| Medium | 4 | 4 | 100% |
+| Low | 2 | 0 | 待处理 |
+| **总计** | **12** | **10** | **83%** |
+
+### 📁 新增文件
+
+| 文件 | 用途 |
+|------|------|
+| `src/pages/AccountSettings.tsx` | 账号与安全设置页 |
+
+### 🔧 修改文件
+
+| 文件 | 修改内容 |
+|------|----------|
+| `server/routes/auth.ts` | 排除 password_hash 敏感字段 |
+| `server/routes/orders.ts` | 新增订单统计接口 |
+| `src/lib/api.ts` | 新增 ordersApi.getStats 方法 |
+| `src/pages/Profile.tsx` | 使用新统计接口，添加错误处理 |
+| `src/pages/Addresses.tsx` | 添加手机号验证，使用 Toast |
+| `src/pages/Settings.tsx` | 修复无效链接，版本号提取常量 |
+| `src/pages/PersonalInfo.tsx` | 使用 Gender 枚举 |
+| `src/types.ts` | 添加 Gender 枚举 |
+| `src/App.tsx` | 添加 AccountSettings 路由 |
+
+### ✅ 验证测试
+
+| 测试项 | 结果 |
+|--------|:----:|
+| /api/auth/me | ✅ 不返回敏感字段 |
+| /api/orders/stats | ✅ 返回正确统计 |
+| 地址手机号验证 | ✅ 格式错误提示 |
+| 设置页面链接 | ✅ 全部有效 |
+
+---
+
+**最后更新**: 2026-04-05

@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useToast } from '../../components/Toast';
-import { marketingApi } from '../../lib/api';
-import { CampaignStatus, CampaignStatusLabel } from '../../types';
+import { adminApi } from '../../lib/api';
+import { CampaignStatus } from '../../types';
 
 interface Product {
   id: string;
@@ -52,24 +52,22 @@ export default function AdminEditFlashSale() {
   const fetchFlashSale = async () => {
     setLoading(true);
     try {
-      const res = await marketingApi.getFlashSales();
+      const res = await adminApi.getFlashSale(id!);
       if (res.success && res.data) {
-        const flashSale = res.data.find((item: FlashSale) => item.id === id);
-        if (flashSale) {
-          setSelectedProduct(flashSale.product || null);
-          setFormData({
-            name: '',
-            flash_price: String(flashSale.flash_price || ''),
-            stock: String(flashSale.stock || ''),
-            limit_per_user: '0',
-            start_time: flashSale.start_time ? flashSale.start_time.slice(0, 16) : '',
-            end_time: flashSale.end_time ? flashSale.end_time.slice(0, 16) : '',
-            description: ''
-          });
-        } else {
-          toast.error('秒杀活动不存在');
-          navigate('/admin/marketing');
-        }
+        const flashSale = res.data;
+        setSelectedProduct(flashSale.product || null);
+        setFormData({
+          name: '',
+          flash_price: String(flashSale.flash_price || ''),
+          stock: String(flashSale.stock || ''),
+          limit_per_user: String(flashSale.limit_per_user || '0'),
+          start_time: flashSale.start_time ? flashSale.start_time.slice(0, 16) : '',
+          end_time: flashSale.end_time ? flashSale.end_time.slice(0, 16) : '',
+          description: ''
+        });
+      } else {
+        toast.error('秒杀活动不存在');
+        navigate('/admin/marketing');
       }
     } catch (error) {
       console.error('Get flash sale error:', error);
@@ -96,13 +94,29 @@ export default function AdminEditFlashSale() {
       toast.error('请输入正确的秒杀价');
       return;
     }
+    if (!formData.stock || parseInt(formData.stock) <= 0) {
+      toast.error('请输入正确的库存');
+      return;
+    }
 
     setSaving(true);
     try {
-      // 调用更新API（需要后端支持）
-      toast.success('保存成功');
-      navigate('/admin/marketing');
+      const res = await adminApi.updateFlashSale(id!, {
+        flash_price: parseFloat(formData.flash_price),
+        stock: parseInt(formData.stock),
+        start_time: new Date(formData.start_time).toISOString(),
+        end_time: new Date(formData.end_time).toISOString(),
+        limit_per_user: parseInt(formData.limit_per_user) || 0
+      });
+
+      if (res.success) {
+        toast.success('保存成功');
+        navigate('/admin/marketing');
+      } else {
+        toast.error(res.error?.message || '保存失败');
+      }
     } catch (error) {
+      console.error('Update flash sale error:', error);
       toast.error('保存失败');
     } finally {
       setSaving(false);

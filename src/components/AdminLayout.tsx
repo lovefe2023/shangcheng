@@ -21,9 +21,9 @@ export default function AdminLayout() {
     try {
       const res = await authApi.getMe();
       if (res.success && res.data) {
-        // 检查是否是管理员
-        const adminPhones = ['13800138001']; // 与后端 ADMIN_PHONES 一致
-        if (adminPhones.includes(res.data.phone)) {
+        // 使用后端返回的 role 字段判断管理员权限
+        // 后端会在 middleware 中根据 ADMIN_PHONES 设置 role
+        if (res.data.role === 'admin') {
           setIsLoggedIn(true);
         }
       }

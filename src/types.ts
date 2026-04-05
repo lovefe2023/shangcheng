@@ -96,6 +96,44 @@ export const PartnerActivationStatusLabel: Record<PartnerActivationStatus, strin
   [PartnerActivationStatus.PENDING]: '待激活',
 };
 
+// 收益类型
+export enum IncomeType {
+  REFERRAL_REWARD = 'referral_reward',
+  SALES_COMMISSION = 'sales_commission',
+  DIVIDEND = 'dividend',
+}
+
+// 收益类型显示文本
+export const IncomeTypeLabel: Record<IncomeType, string> = {
+  [IncomeType.REFERRAL_REWARD]: '推荐奖励',
+  [IncomeType.SALES_COMMISSION]: '销售提成',
+  [IncomeType.DIVIDEND]: '销售分红',
+};
+
+// 收益状态
+export enum IncomeStatus {
+  PENDING = 'pending',
+  SETTLED = 'settled',
+  COMPLETED = 'completed',
+}
+
+// 收益状态显示文本
+export const IncomeStatusLabel: Record<IncomeStatus, string> = {
+  [IncomeStatus.PENDING]: '待结算',
+  [IncomeStatus.SETTLED]: '已结算',
+  [IncomeStatus.COMPLETED]: '已完成',
+};
+
+// 性别
+export enum Gender {
+  MALE = '男',
+  FEMALE = '女',
+  SECRET = '保密',
+}
+
+// 性别选项
+export const GenderOptions = [Gender.MALE, Gender.FEMALE, Gender.SECRET];
+
 // ===========================================
 // 商品相关
 // ===========================================
@@ -240,20 +278,6 @@ export const ContentStatusLabel: Record<ContentStatus, string> = {
   [ContentStatus.HIDDEN]: '已隐藏',
   [ContentStatus.PUBLISHED]: '已发布',
   [ContentStatus.DRAFT]: '草稿',
-};
-
-// 收益状态
-export enum IncomeStatus {
-  PENDING = 'pending',
-  SETTLED = 'settled',
-  COMPLETED = 'completed',
-}
-
-// 收益状态显示文本
-export const IncomeStatusLabel: Record<IncomeStatus, string> = {
-  [IncomeStatus.PENDING]: '待结算',
-  [IncomeStatus.SETTLED]: '已结算',
-  [IncomeStatus.COMPLETED]: '已完成',
 };
 
 // 打款状态 (已废弃，使用 WithdrawalStatus)

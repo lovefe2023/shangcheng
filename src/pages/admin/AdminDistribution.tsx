@@ -61,11 +61,24 @@ export default function AdminDistribution() {
 
   // Leaderboard states
   const [leaderboardType, setLeaderboardType] = useState('team');
+  const [leaderboardPeriod, setLeaderboardPeriod] = useState('month');
   const [leaderboardData, setLeaderboardData] = useState<LeaderboardItem[]>([]);
 
   // Config states
   const [configLoading, setConfigLoading] = useState(false);
   const [distributionSettings, setDistributionSettings] = useState<Record<string, string>>({});
+
+  // Level config states
+  const [referralReward, setReferralReward] = useState('1000');
+  const [salesCommissionRate, setSalesCommissionRate] = useState('20');
+  const [oneStarDirectPartner, setOneStarDirectPartner] = useState('3');
+  const [twoStarDirectOneStar, setTwoStarDirectOneStar] = useState('3');
+  const [twoStarDirectPartner, setTwoStarDirectPartner] = useState('6');
+
+  // Pool config states
+  const [poolInjectAmount, setPoolInjectAmount] = useState('1000');
+  const [poolPeriod, setPoolPeriod] = useState('monthly');
+  const [poolAlgorithm, setPoolAlgorithm] = useState('average');
 
   const pageSize = 10;
 
@@ -77,7 +90,7 @@ export default function AdminDistribution() {
     } else if (activeTab === 'level-config' || activeTab === 'pool-config') {
       fetchDistributionSettings();
     }
-  }, [activeTab, earningsPage, earningsType]);
+  }, [activeTab, earningsPage, earningsType, earningsSearch, leaderboardPeriod]);
 
   const fetchEarningsRecords = async () => {
     setLoading(true);
@@ -85,7 +98,8 @@ export default function AdminDistribution() {
       const res = await adminApi.getIncomeRecords({
         page: earningsPage,
         pageSize,
-        type: earningsType || undefined
+        type: earningsType || undefined,
+        keyword: earningsSearch || undefined
       });
 
       if (res.success && res.data) {
@@ -103,7 +117,10 @@ export default function AdminDistribution() {
   const fetchLeaderboard = async () => {
     setLoading(true);
     try {
-      const res = await adminApi.getSalesLeaderboard({ limit: 50 });
+      const res = await adminApi.getSalesLeaderboard({
+        period: leaderboardPeriod,
+        limit: 50
+      });
       if (res.success && res.data) {
         setLeaderboardData(res.data);
       }
@@ -121,16 +138,50 @@ export default function AdminDistribution() {
       const res = await adminApi.getDistributionSettings();
       if (res.success && res.data) {
         setDistributionSettings(res.data);
+        // 加载配置值到状态变量
+        if (res.data.partner_referral_reward) setReferralReward(res.data.partner_referral_reward);
+        if (res.data.partner_sales_commission_rate) setSalesCommissionRate(res.data.partner_sales_commission_rate);
+        if (res.data.partner_one_star_direct) setOneStarDirectPartner(res.data.partner_one_star_direct);
+        if (res.data.partner_two_star_direct_one) setTwoStarDirectOneStar(res.data.partner_two_star_direct_one);
+        if (res.data.partner_two_star_direct) setTwoStarDirectPartner(res.data.partner_two_star_direct);
+        if (res.data.partner_pool_inject_amount) setPoolInjectAmount(res.data.partner_pool_inject_amount);
+        if (res.data.partner_pool_period) setPoolPeriod(res.data.partner_pool_period);
+        if (res.data.partner_pool_algorithm) setPoolAlgorithm(res.data.partner_pool_algorithm);
       }
     } catch (error) {
       console.error('Get distribution settings error:', error);
+      toast.error('获取配置失败');
     } finally {
       setConfigLoading(false);
     }
   };
 
   const handleSaveSettings = async () => {
-    toast.success('配置保存成功（演示）');
+    setConfigLoading(true);
+    try {
+      const settings = [
+        { key: 'partner_referral_reward', value: referralReward },
+        { key: 'partner_sales_commission_rate', value: salesCommissionRate },
+        { key: 'partner_one_star_direct', value: oneStarDirectPartner },
+        { key: 'partner_two_star_direct_one', value: twoStarDirectOneStar },
+        { key: 'partner_two_star_direct', value: twoStarDirectPartner },
+        { key: 'partner_pool_inject_amount', value: poolInjectAmount },
+        { key: 'partner_pool_period', value: poolPeriod },
+        { key: 'partner_pool_algorithm', value: poolAlgorithm },
+      ];
+
+      const res = await adminApi.updateDistributionSettings(settings);
+      if (res.success) {
+        toast.success('配置保存成功');
+      } else {
+        toast.error(res.error?.message || '保存失败');
+      }
+    } catch (error) {
+      console.error('Save distribution settings error:', error);
+      toast.error('保存失败');
+    } finally {
+      setConfigLoading(false);
+    }
   };
 
   const formatCurrency = (value: number) => {
@@ -215,7 +266,12 @@ export default function AdminDistribution() {
                   <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-700 pb-2">一星合伙人</label>
                   <div className="flex items-center gap-2">
                     <span className="text-sm text-slate-500">条件1：直推合伙人满</span>
-                    <input type="number" defaultValue={3} className="w-20 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-primary" />
+                    <input
+                      type="number"
+                      value={oneStarDirectPartner}
+                      onChange={(e) => setOneStarDirectPartner(e.target.value)}
+                      className="w-20 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-primary"
+                    />
                     <span className="text-sm text-slate-500">人</span>
                   </div>
                 </div>
@@ -223,51 +279,22 @@ export default function AdminDistribution() {
                   <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-700 pb-2">二星合伙人</label>
                   <div className="flex items-center gap-2">
                     <span className="text-sm text-slate-500">条件1：直推一星满</span>
-                    <input type="number" defaultValue={3} className="w-20 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-primary" />
+                    <input
+                      type="number"
+                      value={twoStarDirectOneStar}
+                      onChange={(e) => setTwoStarDirectOneStar(e.target.value)}
+                      className="w-20 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-primary"
+                    />
                     <span className="text-sm text-slate-500">人</span>
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="text-sm text-slate-500">条件2：直推合伙人满</span>
-                    <input type="number" defaultValue={6} className="w-20 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-primary" />
-                    <span className="text-sm text-slate-500">人</span>
-                  </div>
-                </div>
-                <div className="bg-slate-50 dark:bg-slate-900/50 p-4 rounded-xl border border-slate-100 dark:border-slate-700/50 space-y-3">
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-700 pb-2">三星合伙人</label>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm text-slate-500">条件1：直推二星满</span>
-                    <input type="number" defaultValue={3} className="w-20 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-primary" />
-                    <span className="text-sm text-slate-500">人</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm text-slate-500">条件2：直推合伙人满</span>
-                    <input type="number" defaultValue={9} className="w-20 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-primary" />
-                    <span className="text-sm text-slate-500">人</span>
-                  </div>
-                </div>
-                <div className="bg-slate-50 dark:bg-slate-900/50 p-4 rounded-xl border border-slate-100 dark:border-slate-700/50 space-y-3">
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-700 pb-2">四星合伙人</label>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm text-slate-500">条件1：直推三星满</span>
-                    <input type="number" defaultValue={3} className="w-20 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-primary" />
-                    <span className="text-sm text-slate-500">人</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm text-slate-500">条件2：直推合伙人满</span>
-                    <input type="number" defaultValue={12} className="w-20 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-primary" />
-                    <span className="text-sm text-slate-500">人</span>
-                  </div>
-                </div>
-                <div className="bg-slate-50 dark:bg-slate-900/50 p-4 rounded-xl border border-slate-100 dark:border-slate-700/50 space-y-3">
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 border-b border-slate-200 dark:border-slate-700 pb-2">五星合伙人</label>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm text-slate-500">条件1：直推四星满</span>
-                    <input type="number" defaultValue={3} className="w-20 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-primary" />
-                    <span className="text-sm text-slate-500">人</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm text-slate-500">条件2：直推合伙人满</span>
-                    <input type="number" defaultValue={15} className="w-20 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-primary" />
+                    <input
+                      type="number"
+                      value={twoStarDirectPartner}
+                      onChange={(e) => setTwoStarDirectPartner(e.target.value)}
+                      className="w-20 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-primary"
+                    />
                     <span className="text-sm text-slate-500">人</span>
                   </div>
                 </div>
@@ -285,12 +312,22 @@ export default function AdminDistribution() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
                   <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">推荐奖励金额 (元/人)</label>
-                  <input type="number" defaultValue={1000} className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-sm outline-none focus:border-primary transition-colors" />
+                  <input
+                    type="number"
+                    value={referralReward}
+                    onChange={(e) => setReferralReward(e.target.value)}
+                    className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-sm outline-none focus:border-primary transition-colors"
+                  />
                   <p className="text-xs text-slate-500 mt-1.5">每推荐一个新合伙人，推荐人可获得的固定奖励金额。</p>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">普通订单销售提成比例 (%)</label>
-                  <input type="number" defaultValue={20} className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-sm outline-none focus:border-primary transition-colors" />
+                  <input
+                    type="number"
+                    value={salesCommissionRate}
+                    onChange={(e) => setSalesCommissionRate(e.target.value)}
+                    className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-sm outline-none focus:border-primary transition-colors"
+                  />
                   <p className="text-xs text-slate-500 mt-1.5">合伙人推广普通商品订单时，可获得的提成比例。</p>
                 </div>
               </div>
@@ -322,12 +359,21 @@ export default function AdminDistribution() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <div>
                     <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">每次注入金额 (元)</label>
-                    <input type="number" defaultValue={1000} className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-sm outline-none focus:border-primary transition-colors" />
+                    <input
+                      type="number"
+                      value={poolInjectAmount}
+                      onChange={(e) => setPoolInjectAmount(e.target.value)}
+                      className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-sm outline-none focus:border-primary transition-colors"
+                    />
                     <p className="text-xs text-slate-500 mt-1.5">新合伙人加入时，注入分红池的总金额，将平均分配至5个星级池。</p>
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">分红周期</label>
-                    <select className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-sm outline-none focus:border-primary transition-colors">
+                    <select
+                      value={poolPeriod}
+                      onChange={(e) => setPoolPeriod(e.target.value)}
+                      className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-sm outline-none focus:border-primary transition-colors"
+                    >
                       <option value="monthly">每月</option>
                       <option value="weekly">每周</option>
                       <option value="custom">自定义</option>
@@ -336,7 +382,11 @@ export default function AdminDistribution() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">分配算法</label>
-                  <select className="w-full md:w-1/2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-sm outline-none focus:border-primary transition-colors">
+                  <select
+                    value={poolAlgorithm}
+                    onChange={(e) => setPoolAlgorithm(e.target.value)}
+                    className="w-full md:w-1/2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-4 py-2.5 text-sm outline-none focus:border-primary transition-colors"
+                  >
                     <option value="average">平均分配 (池内总金额 ÷ 达标人数)</option>
                     <option value="weight">权重分配 (预留)</option>
                   </select>
@@ -389,6 +439,8 @@ export default function AdminDistribution() {
                   <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-[20px]">search</span>
                   <input
                     type="text"
+                    value={earningsSearch}
+                    onChange={(e) => { setEarningsSearch(e.target.value); setEarningsPage(1); }}
                     placeholder="搜索用户昵称/手机号..."
                     className="pl-10 pr-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 w-64"
                   />
@@ -495,6 +547,16 @@ export default function AdminDistribution() {
               >
                 <option value="team">团队销售额排行</option>
                 <option value="personal">个人直推销售额排行</option>
+              </select>
+              <select
+                value={leaderboardPeriod}
+                onChange={(e) => setLeaderboardPeriod(e.target.value)}
+                className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sm rounded-lg px-3 py-2 outline-none"
+              >
+                <option value="week">最近7天</option>
+                <option value="month">最近30天</option>
+                <option value="year">最近一年</option>
+                <option value="all">全部时间</option>
               </select>
             </div>
 

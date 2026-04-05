@@ -117,6 +117,63 @@ router.get('/', async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/products/categories
+ * 分类列表 (兼容路径，重定向到 /categories/list)
+ */
+router.get('/categories', async (_req: Request, res: Response) => {
+  try {
+    const { data: categories, error } = await supabaseAdmin
+      .from('categories')
+      .select('*')
+      .order('sort_order', { ascending: true });
+
+    if (error) {
+      return res.status(500).json({
+        success: false,
+        error: {
+          code: 'QUERY_ERROR',
+          message: '查询分类失败'
+        }
+      });
+    }
+
+    // 构建树形结构
+    const categoryMap = new Map();
+    const tree: any[] = [];
+
+    categories?.forEach(cat => {
+      categoryMap.set(cat.id, { ...cat, children: [] });
+    });
+
+    categories?.forEach(cat => {
+      const node = categoryMap.get(cat.id);
+      if (cat.parent_id) {
+        const parent = categoryMap.get(cat.parent_id);
+        if (parent) {
+          parent.children.push(node);
+        }
+      } else {
+        tree.push(node);
+      }
+    });
+
+    res.json({
+      success: true,
+      data: tree
+    });
+  } catch (error) {
+    console.error('Get categories error:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'SERVER_ERROR',
+        message: '服务器错误'
+      }
+    });
+  }
+});
+
+/**
  * GET /api/products/categories/list
  * 分类列表 (必须在 /:id 之前)
  */

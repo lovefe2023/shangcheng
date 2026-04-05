@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import Empty from '../components/Empty';
 import { addressesApi } from '../lib/api';
 import { Skeleton } from '../components/Skeleton';
+import { useToast } from '../components/Toast';
 
 interface Address {
   id: string;
@@ -17,6 +18,7 @@ interface Address {
 
 export default function Addresses() {
   const navigate = useNavigate();
+  const toast = useToast();
 
   const [addresses, setAddresses] = useState<Address[]>([]);
   const [loading, setLoading] = useState(true);
@@ -36,6 +38,12 @@ export default function Addresses() {
     detail: '',
     is_default: false
   });
+
+  // 验证手机号格式
+  const validatePhone = (phone: string): boolean => {
+    const phoneRegex = /^1[3-9]\d{9}$/;
+    return phoneRegex.test(phone);
+  };
 
   // 加载地址列表
   useEffect(() => {
@@ -82,6 +90,12 @@ export default function Addresses() {
   // 保存编辑
   const handleSaveEdit = async () => {
     if (!editingAddress) return;
+
+    if (!validatePhone(editingAddress.phone)) {
+      toast.error('请输入正确的手机号码');
+      return;
+    }
+
     setSaving(true);
     try {
       const res = await addressesApi.update(editingAddress.id, {
@@ -94,14 +108,15 @@ export default function Addresses() {
         is_default: editingAddress.is_default
       });
       if (res.success) {
+        toast.success('保存成功');
         setIsEditModalOpen(false);
         setEditingAddress(null);
         loadAddresses();
       } else {
-        alert(res.error?.message || '保存失败');
+        toast.error(res.error?.message || '保存失败');
       }
     } catch (err) {
-      alert('网络错误，请稍后重试');
+      toast.error('网络错误，请稍后重试');
     } finally {
       setSaving(false);
     }
@@ -113,21 +128,28 @@ export default function Addresses() {
     try {
       const res = await addressesApi.remove(id);
       if (res.success) {
+        toast.success('删除成功');
         loadAddresses();
       } else {
-        alert(res.error?.message || '删除失败');
+        toast.error(res.error?.message || '删除失败');
       }
     } catch (err) {
-      alert('网络错误，请稍后重试');
+      toast.error('网络错误，请稍后重试');
     }
   };
 
   // 添加新地址
   const handleAddAddress = async () => {
     if (!newAddress.name || !newAddress.phone || !newAddress.detail) {
-      alert('请填写收货人、手机号码和详细地址');
+      toast.error('请填写收货人、手机号码和详细地址');
       return;
     }
+
+    if (!validatePhone(newAddress.phone)) {
+      toast.error('请输入正确的手机号码');
+      return;
+    }
+
     setSaving(true);
     try {
       const res = await addressesApi.add({
@@ -140,6 +162,7 @@ export default function Addresses() {
         is_default: newAddress.is_default
       });
       if (res.success) {
+        toast.success('添加成功');
         setIsAddModalOpen(false);
         setNewAddress({
           name: '',
@@ -152,10 +175,10 @@ export default function Addresses() {
         });
         loadAddresses();
       } else {
-        alert(res.error?.message || '添加失败');
+        toast.error(res.error?.message || '添加失败');
       }
     } catch (err) {
-      alert('网络错误，请稍后重试');
+      toast.error('网络错误，请稍后重试');
     } finally {
       setSaving(false);
     }

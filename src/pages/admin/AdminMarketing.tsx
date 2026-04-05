@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import Empty from '../../components/Empty';
 import { ListSkeleton } from '../../components/Skeleton';
 import { useToast } from '../../components/Toast';
-import { marketingApi } from '../../lib/api';
+import { marketingApi, adminApi } from '../../lib/api';
 import { CampaignStatus, CampaignStatusLabel, PartnerPackageStatus, PartnerPackageStatusLabel, CouponStatus, CouponStatusLabel } from '../../types';
 
 interface FlashSale {
@@ -86,6 +86,12 @@ export default function AdminMarketing() {
   const [flashSaleSearch, setFlashSaleSearch] = useState('');
   const [groupBuySearch, setGroupBuySearch] = useState('');
   const [packageSearch, setPackageSearch] = useState('');
+
+  // Delete states
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<{ type: 'flashSale' | 'groupBuy'; id: string; name: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const deletingIds = new Set<string>();
 
   useEffect(() => {
     fetchFlashSales();
@@ -174,6 +180,45 @@ export default function AdminMarketing() {
 
   const formatStatus = (status: string) => {
     return CampaignStatusLabel[status as CampaignStatus] || status;
+  };
+
+  // 删除相关
+  const handleDeleteClick = (type: 'flashSale' | 'groupBuy', id: string, name: string) => {
+    setDeleteTarget({ type, id, name });
+    setShowDeleteModal(true);
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget) return;
+
+    setDeleting(true);
+    try {
+      let res;
+      if (deleteTarget.type === 'flashSale') {
+        res = await adminApi.deleteFlashSale(deleteTarget.id);
+      } else {
+        res = await adminApi.deleteGroupBuy(deleteTarget.id);
+      }
+
+      if (res.success) {
+        toast.success('删除成功');
+        // 刷新列表
+        if (deleteTarget.type === 'flashSale') {
+          fetchFlashSales();
+        } else {
+          fetchGroupBuys();
+        }
+      } else {
+        toast.error(res.error?.message || '删除失败');
+      }
+    } catch (error) {
+      console.error('Delete error:', error);
+      toast.error('删除失败');
+    } finally {
+      setDeleting(false);
+      setShowDeleteModal(false);
+      setDeleteTarget(null);
+    }
   };
 
   return (
@@ -298,7 +343,11 @@ export default function AdminMarketing() {
                             编辑
                           </button>
                           {item.status === CampaignStatus.NOT_STARTED && (
-                            <button className="text-red-500 text-sm font-medium hover:underline">
+                            <button
+                              onClick={() => handleDeleteClick('flashSale', item.id, item.product?.name || '该秒杀活动')}
+                              disabled={deletingIds.has(item.id)}
+                              className="text-red-500 text-sm font-medium hover:underline disabled:opacity-50"
+                            >
                               删除
                             </button>
                           )}
@@ -444,7 +493,11 @@ export default function AdminMarketing() {
                             编辑
                           </button>
                           {item.status === CampaignStatus.NOT_STARTED && (
-                            <button className="text-red-500 text-sm font-medium hover:underline">
+                            <button
+                              onClick={() => handleDeleteClick('groupBuy', item.id, item.product?.name || '该团购活动')}
+                              disabled={deletingIds.has(item.id)}
+                              className="text-red-500 text-sm font-medium hover:underline disabled:opacity-50"
+                            >
                               删除
                             </button>
                           )}
@@ -473,6 +526,43 @@ export default function AdminMarketing() {
           </div>
         )}
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteModal && deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl p-6 w-full max-w-md shadow-xl border border-slate-200 dark:border-slate-700">
+            <div className="flex items-center gap-3 mb-4">
+              <span className="material-symbols-outlined text-red-500 text-2xl">warning</span>
+              <h3 className="text-lg font-bold text-slate-900 dark:text-white">确认删除</h3>
+            </div>
+            <p className="text-sm text-slate-600 dark:text-slate-300 mb-6">
+              确定要删除 <span className="font-medium text-slate-900 dark:text-white">{deleteTarget.name}</span> 吗？此操作不可撤销。
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => {
+                  setShowDeleteModal(false);
+                  setDeleteTarget(null);
+                }}
+                disabled={deleting}
+                className="px-4 py-2 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 rounded-lg text-sm font-medium hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors disabled:opacity-50"
+              >
+                取消
+              </button>
+              <button
+                onClick={handleDeleteConfirm}
+                disabled={deleting}
+                className="px-4 py-2 bg-red-500 text-white rounded-lg text-sm font-medium hover:bg-red-600 transition-colors disabled:opacity-50 flex items-center gap-2"
+              >
+                {deleting && (
+                  <span className="material-symbols-outlined text-[18px] animate-spin">progress_activity</span>
+                )}
+                {deleting ? '删除中...' : '确认删除'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

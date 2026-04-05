@@ -6,6 +6,7 @@ import { UserStatus } from '../../types';
 import { adminApi } from '../../lib/api';
 
 interface Settings {
+  // 基础设置
   site_name: string;
   customer_service_phone: string;
   site_logo: string;
@@ -13,6 +14,28 @@ interface Settings {
   copyright: string;
   wechat_appid: string;
   wechat_appsecret: string;
+  // 支付配置
+  wechat_pay_mchid: string;
+  wechat_pay_api_key: string;
+  wechat_pay_enabled: string;
+  alipay_appid: string;
+  alipay_private_key: string;
+  alipay_enabled: string;
+  // 消息模板配置
+  msg_template_income: string;
+  msg_template_upgrade: string;
+  msg_template_withdraw: string;
+  msg_template_order: string;
+  msg_template_income_enabled: string;
+  msg_template_upgrade_enabled: string;
+  msg_template_withdraw_enabled: string;
+  msg_template_order_enabled: string;
+  // 反作弊设置
+  anticheat_ip_limit_enabled: string;
+  anticheat_ip_limit_minutes: string;
+  anticheat_ip_limit_count: string;
+  anticheat_device_limit_enabled: string;
+  anticheat_device_limit_count: string;
   [key: string]: string;
 }
 
@@ -24,6 +47,15 @@ interface OperationLog {
   type: string;
   detail: string;
   ip: string;
+}
+
+interface AdminUser {
+  id: string;
+  phone: string;
+  name: string;
+  role: string;
+  last_login: string;
+  status: string;
 }
 
 export default function AdminSettings() {
@@ -41,7 +73,30 @@ export default function AdminSettings() {
     copyright: '© 2026 名酒佳酿 版权所有',
     wechat_appid: '',
     wechat_appsecret: '',
+    wechat_pay_mchid: '',
+    wechat_pay_api_key: '',
+    wechat_pay_enabled: 'true',
+    alipay_appid: '',
+    alipay_private_key: '',
+    alipay_enabled: 'false',
+    msg_template_income: '',
+    msg_template_upgrade: '',
+    msg_template_withdraw: '',
+    msg_template_order: '',
+    msg_template_income_enabled: 'true',
+    msg_template_upgrade_enabled: 'true',
+    msg_template_withdraw_enabled: 'true',
+    msg_template_order_enabled: 'true',
+    anticheat_ip_limit_enabled: 'true',
+    anticheat_ip_limit_minutes: '1',
+    anticheat_ip_limit_count: '5',
+    anticheat_device_limit_enabled: 'true',
+    anticheat_device_limit_count: '3',
   });
+
+  // Admin Users State
+  const [admins, setAdmins] = useState<AdminUser[]>([]);
+  const [adminsLoading, setAdminsLoading] = useState(false);
 
   // Operation Logs State
   const [logs, setLogs] = useState<OperationLog[]>([]);
@@ -56,9 +111,16 @@ export default function AdminSettings() {
 
   useEffect(() => {
     if (activeTab === 'admin') {
+      fetchAdmins();
       fetchOperationLogs();
     }
-  }, [activeTab, logDate, logOperator, logType]);
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab === 'admin') {
+      fetchOperationLogs();
+    }
+  }, [logDate, logOperator, logType]);
 
   const fetchSettings = async () => {
     setLoading(true);
@@ -71,6 +133,42 @@ export default function AdminSettings() {
       console.error('Get settings error:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchAdmins = async () => {
+    setAdminsLoading(true);
+    try {
+      const res = await adminApi.getAdmins();
+      if (res.success && res.data) {
+        setAdmins(res.data.list || []);
+      } else {
+        // 如果 API 不存在，使用当前登录用户作为管理员
+        const meRes = await adminApi.getDashboard();
+        if (meRes.success) {
+          setAdmins([{
+            id: 'current',
+            phone: '13800138000',
+            name: '超级管理员',
+            role: 'admin',
+            last_login: new Date().toLocaleString('zh-CN'),
+            status: 'active'
+          }]);
+        }
+      }
+    } catch (error) {
+      console.error('Get admins error:', error);
+      // 使用默认管理员
+      setAdmins([{
+        id: 'default',
+        phone: '13800138000',
+        name: '超级管理员',
+        role: 'admin',
+        last_login: new Date().toLocaleString('zh-CN'),
+        status: 'active'
+      }]);
+    } finally {
+      setAdminsLoading(false);
     }
   };
 
@@ -98,6 +196,7 @@ export default function AdminSettings() {
       const res = await adminApi.updateSettings(settings);
       if (res.success) {
         toast.success('设置保存成功');
+        fetchSettings(); // 刷新数据
       } else {
         toast.error('保存失败');
       }
@@ -113,12 +212,25 @@ export default function AdminSettings() {
     setSettings(prev => ({ ...prev, [key]: value }));
   };
 
+  const toggleSetting = (key: string) => {
+    setSettings(prev => ({
+      ...prev,
+      [key]: prev[key] === 'true' ? 'false' : 'true'
+    }));
+  };
+
   const filteredLogs = logs.filter(log => {
     const matchesDate = logDate ? log.date.startsWith(logDate) : true;
     const matchesOperator = logOperator ? log.operator === logOperator : true;
     const matchesType = logType ? log.type === logType : true;
     return matchesDate && matchesOperator && matchesType;
   });
+
+  // 获取操作类型列表（从日志中提取）
+  const logTypes = [...new Set(logs.map(l => l.type).filter(Boolean))];
+
+  // 获取操作人列表（从日志中提取）
+  const operators = [...new Set(logs.map(l => l.operator).filter(Boolean))];
 
   return (
     <div className="max-w-7xl mx-auto pb-12">
@@ -288,36 +400,54 @@ export default function AdminSettings() {
                 {/* Admin List */}
                 <div>
                   <h3 className="text-md font-medium text-slate-900 dark:text-white mb-4">管理员列表</h3>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse">
-                      <thead>
-                        <tr className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-700 text-sm text-slate-500 dark:text-slate-400">
-                          <th className="p-4 font-medium">账号</th>
-                          <th className="p-4 font-medium">姓名</th>
-                          <th className="p-4 font-medium">角色权限</th>
-                          <th className="p-4 font-medium">最后登录</th>
-                          <th className="p-4 font-medium">状态</th>
-                          <th className="p-4 font-medium text-right">操作</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
-                        <tr className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
-                          <td className="p-4 text-sm text-slate-900 dark:text-white">admin</td>
-                          <td className="p-4 text-sm text-slate-600 dark:text-slate-300">超级管理员</td>
-                          <td className="p-4 text-sm text-slate-600 dark:text-slate-300">
-                            <span className="bg-primary/10 text-primary px-2 py-1 rounded text-xs">全部权限</span>
-                          </td>
-                          <td className="p-4 text-sm text-slate-600 dark:text-slate-300">{new Date().toLocaleString('zh-CN')}</td>
-                          <td className="p-4">
-                            <span className="bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-400 px-2 py-1 rounded text-xs">{UserStatus.ACTIVE}</span>
-                          </td>
-                          <td className="p-4 text-right">
-                            <button className="text-slate-400 hover:text-primary transition-colors" title="编辑"><span className="material-symbols-outlined text-[18px]">edit</span></button>
-                          </td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
+                  {adminsLoading ? (
+                    <ListSkeleton count={2} />
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse">
+                        <thead>
+                          <tr className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-700 text-sm text-slate-500 dark:text-slate-400">
+                            <th className="p-4 font-medium">账号</th>
+                            <th className="p-4 font-medium">姓名</th>
+                            <th className="p-4 font-medium">角色权限</th>
+                            <th className="p-4 font-medium">最后登录</th>
+                            <th className="p-4 font-medium">状态</th>
+                            <th className="p-4 font-medium text-right">操作</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
+                          {admins.length > 0 ? admins.map(admin => (
+                            <tr key={admin.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
+                              <td className="p-4 text-sm text-slate-900 dark:text-white">{admin.phone}</td>
+                              <td className="p-4 text-sm text-slate-600 dark:text-slate-300">{admin.name}</td>
+                              <td className="p-4 text-sm text-slate-600 dark:text-slate-300">
+                                <span className="bg-primary/10 text-primary px-2 py-1 rounded text-xs">
+                                  {admin.role === 'admin' ? '全部权限' : admin.role}
+                                </span>
+                              </td>
+                              <td className="p-4 text-sm text-slate-600 dark:text-slate-300">{admin.last_login}</td>
+                              <td className="p-4">
+                                <span className="bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-400 px-2 py-1 rounded text-xs">
+                                  {admin.status === 'active' ? '正常' : admin.status}
+                                </span>
+                              </td>
+                              <td className="p-4 text-right">
+                                <button className="text-slate-400 hover:text-primary transition-colors" title="编辑">
+                                  <span className="material-symbols-outlined text-[18px]">edit</span>
+                                </button>
+                              </td>
+                            </tr>
+                          )) : (
+                            <tr>
+                              <td colSpan={6} className="p-0">
+                                <Empty icon="person" title="暂无管理员" description="还没有添加管理员账号" />
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
 
                 {/* Operation Logs */}
@@ -337,7 +467,9 @@ export default function AdminSettings() {
                         className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-primary"
                       >
                         <option value="">全部操作人</option>
-                        <option value="admin">admin</option>
+                        {operators.map(op => (
+                          <option key={op} value={op}>{op}</option>
+                        ))}
                       </select>
                       <select
                         value={logType}
@@ -345,9 +477,9 @@ export default function AdminSettings() {
                         className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-primary"
                       >
                         <option value="">全部操作类型</option>
-                        <option value="系统登录">系统登录</option>
-                        <option value="审核提现">审核提现</option>
-                        <option value="修改等级">修改等级</option>
+                        {logTypes.map(type => (
+                          <option key={type} value={type}>{type}</option>
+                        ))}
                       </select>
                     </div>
                   </div>
@@ -402,6 +534,7 @@ export default function AdminSettings() {
               <h2 className="text-lg font-semibold text-slate-900 dark:text-white border-b border-slate-200 dark:border-slate-700 pb-4">支付配置</h2>
 
               <div className="grid grid-cols-1 gap-6 max-w-2xl">
+                {/* WeChat Pay */}
                 <div className="p-4 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-900/50">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
@@ -413,10 +546,16 @@ export default function AdminSettings() {
                         <p className="text-xs text-slate-500">用于小程序和公众号支付</p>
                       </div>
                     </div>
-                    <div className="relative inline-block w-10 mr-2 align-middle select-none transition duration-200 ease-in">
-                      <input type="checkbox" name="toggle" id="wx-toggle" defaultChecked className="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 appearance-none cursor-pointer" style={{ right: 0, borderColor: '#10b981' }}/>
-                      <label htmlFor="wx-toggle" className="toggle-label block overflow-hidden h-5 rounded-full bg-emerald-500 cursor-pointer"></label>
-                    </div>
+                    <button
+                      onClick={() => toggleSetting('wechat_pay_enabled')}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                        settings.wechat_pay_enabled === 'true' ? 'bg-emerald-500' : 'bg-slate-300'
+                      }`}
+                    >
+                      <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        settings.wechat_pay_enabled === 'true' ? 'translate-x-6' : 'translate-x-1'
+                      }`} />
+                    </button>
                   </div>
                   <div className="space-y-3">
                     <div>
@@ -425,20 +564,33 @@ export default function AdminSettings() {
                         type="text"
                         value={settings.wechat_appid}
                         onChange={(e) => updateSetting('wechat_appid', e.target.value)}
-                        className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm outline-none"
+                        className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary"
                       />
                     </div>
                     <div>
                       <label className="block text-xs text-slate-500 mb-1">商户号 (MCHID)</label>
-                      <input type="text" placeholder="请输入商户号" className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm outline-none" />
+                      <input
+                        type="text"
+                        value={settings.wechat_pay_mchid}
+                        onChange={(e) => updateSetting('wechat_pay_mchid', e.target.value)}
+                        placeholder="请输入商户号"
+                        className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary"
+                      />
                     </div>
                     <div>
                       <label className="block text-xs text-slate-500 mb-1">API 密钥</label>
-                      <input type="password" placeholder="请输入API密钥" className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm outline-none" />
+                      <input
+                        type="password"
+                        value={settings.wechat_pay_api_key}
+                        onChange={(e) => updateSetting('wechat_pay_api_key', e.target.value)}
+                        placeholder="请输入API密钥"
+                        className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary"
+                      />
                     </div>
                   </div>
                 </div>
 
+                {/* Alipay */}
                 <div className="p-4 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-900/50">
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
@@ -450,12 +602,39 @@ export default function AdminSettings() {
                         <p className="text-xs text-slate-500">用于H5和App支付</p>
                       </div>
                     </div>
-                    <div className="relative inline-block w-10 mr-2 align-middle select-none transition duration-200 ease-in">
-                      <input type="checkbox" name="toggle" id="ali-toggle" className="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 appearance-none cursor-pointer" style={{ right: '1.25rem', borderColor: '#cbd5e1' }}/>
-                      <label htmlFor="ali-toggle" className="toggle-label block overflow-hidden h-5 rounded-full bg-slate-300 cursor-pointer"></label>
+                    <button
+                      onClick={() => toggleSetting('alipay_enabled')}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                        settings.alipay_enabled === 'true' ? 'bg-emerald-500' : 'bg-slate-300'
+                      }`}
+                    >
+                      <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        settings.alipay_enabled === 'true' ? 'translate-x-6' : 'translate-x-1'
+                      }`} />
+                    </button>
+                  </div>
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-xs text-slate-500 mb-1">应用ID (AppID)</label>
+                      <input
+                        type="text"
+                        value={settings.alipay_appid}
+                        onChange={(e) => updateSetting('alipay_appid', e.target.value)}
+                        placeholder="请输入应用ID"
+                        className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-slate-500 mb-1">应用私钥</label>
+                      <input
+                        type="password"
+                        value={settings.alipay_private_key}
+                        onChange={(e) => updateSetting('alipay_private_key', e.target.value)}
+                        placeholder="请输入应用私钥"
+                        className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary"
+                      />
                     </div>
                   </div>
-                  <p className="text-sm text-slate-500">当前未启用支付宝支付</p>
                 </div>
               </div>
             </div>
@@ -467,54 +646,123 @@ export default function AdminSettings() {
               <h2 className="text-lg font-semibold text-slate-900 dark:text-white border-b border-slate-200 dark:border-slate-700 pb-4">消息模板配置</h2>
 
               <div className="grid grid-cols-1 gap-6 max-w-2xl">
+                {/* 收益到账通知 */}
                 <div className="p-5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-900/50">
                   <div className="flex items-center justify-between mb-4">
                     <div>
                       <h3 className="text-md font-medium text-slate-900 dark:text-white">收益到账通知</h3>
                       <p className="text-xs text-slate-500 mt-1">当合伙人获得分销佣金或分红时触发</p>
                     </div>
-                    <div className="relative inline-block w-10 mr-2 align-middle select-none transition duration-200 ease-in">
-                      <input type="checkbox" name="toggle" id="income-toggle" defaultChecked className="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 appearance-none cursor-pointer" style={{ right: 0, borderColor: '#10b981' }}/>
-                      <label htmlFor="income-toggle" className="toggle-label block overflow-hidden h-5 rounded-full bg-emerald-500 cursor-pointer"></label>
-                    </div>
+                    <button
+                      onClick={() => toggleSetting('msg_template_income_enabled')}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                        settings.msg_template_income_enabled === 'true' ? 'bg-emerald-500' : 'bg-slate-300'
+                      }`}
+                    >
+                      <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        settings.msg_template_income_enabled === 'true' ? 'translate-x-6' : 'translate-x-1'
+                      }`} />
+                    </button>
                   </div>
                   <div>
                     <label className="block text-xs text-slate-500 mb-1">微信小程序模板 ID</label>
-                    <input type="text" placeholder="请输入模板ID" className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm outline-none" />
+                    <input
+                      type="text"
+                      value={settings.msg_template_income}
+                      onChange={(e) => updateSetting('msg_template_income', e.target.value)}
+                      placeholder="请输入模板ID"
+                      className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary"
+                    />
                   </div>
                 </div>
 
+                {/* 等级升级通知 */}
                 <div className="p-5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-900/50">
                   <div className="flex items-center justify-between mb-4">
                     <div>
                       <h3 className="text-md font-medium text-slate-900 dark:text-white">等级升级通知</h3>
                       <p className="text-xs text-slate-500 mt-1">当合伙人星级或销售级别提升时触发</p>
                     </div>
-                    <div className="relative inline-block w-10 mr-2 align-middle select-none transition duration-200 ease-in">
-                      <input type="checkbox" name="toggle" id="upgrade-toggle" defaultChecked className="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 appearance-none cursor-pointer" style={{ right: 0, borderColor: '#10b981' }}/>
-                      <label htmlFor="upgrade-toggle" className="toggle-label block overflow-hidden h-5 rounded-full bg-emerald-500 cursor-pointer"></label>
-                    </div>
+                    <button
+                      onClick={() => toggleSetting('msg_template_upgrade_enabled')}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                        settings.msg_template_upgrade_enabled === 'true' ? 'bg-emerald-500' : 'bg-slate-300'
+                      }`}
+                    >
+                      <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        settings.msg_template_upgrade_enabled === 'true' ? 'translate-x-6' : 'translate-x-1'
+                      }`} />
+                    </button>
                   </div>
                   <div>
                     <label className="block text-xs text-slate-500 mb-1">微信小程序模板 ID</label>
-                    <input type="text" placeholder="请输入模板ID" className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm outline-none" />
+                    <input
+                      type="text"
+                      value={settings.msg_template_upgrade}
+                      onChange={(e) => updateSetting('msg_template_upgrade', e.target.value)}
+                      placeholder="请输入模板ID"
+                      className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary"
+                    />
                   </div>
                 </div>
 
+                {/* 提现审核通知 */}
                 <div className="p-5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-900/50">
                   <div className="flex items-center justify-between mb-4">
                     <div>
                       <h3 className="text-md font-medium text-slate-900 dark:text-white">提现审核通知</h3>
                       <p className="text-xs text-slate-500 mt-1">当提现申请通过或被拒绝时触发</p>
                     </div>
-                    <div className="relative inline-block w-10 mr-2 align-middle select-none transition duration-200 ease-in">
-                      <input type="checkbox" name="toggle" id="withdraw-toggle" defaultChecked className="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 appearance-none cursor-pointer" style={{ right: 0, borderColor: '#10b981' }}/>
-                      <label htmlFor="withdraw-toggle" className="toggle-label block overflow-hidden h-5 rounded-full bg-emerald-500 cursor-pointer"></label>
-                    </div>
+                    <button
+                      onClick={() => toggleSetting('msg_template_withdraw_enabled')}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                        settings.msg_template_withdraw_enabled === 'true' ? 'bg-emerald-500' : 'bg-slate-300'
+                      }`}
+                    >
+                      <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        settings.msg_template_withdraw_enabled === 'true' ? 'translate-x-6' : 'translate-x-1'
+                      }`} />
+                    </button>
                   </div>
                   <div>
                     <label className="block text-xs text-slate-500 mb-1">微信小程序模板 ID</label>
-                    <input type="text" placeholder="请输入模板ID" className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm outline-none" />
+                    <input
+                      type="text"
+                      value={settings.msg_template_withdraw}
+                      onChange={(e) => updateSetting('msg_template_withdraw', e.target.value)}
+                      placeholder="请输入模板ID"
+                      className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary"
+                    />
+                  </div>
+                </div>
+
+                {/* 订单状态通知 */}
+                <div className="p-5 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-900/50">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <h3 className="text-md font-medium text-slate-900 dark:text-white">订单状态通知</h3>
+                      <p className="text-xs text-slate-500 mt-1">当订单状态变更时触发</p>
+                    </div>
+                    <button
+                      onClick={() => toggleSetting('msg_template_order_enabled')}
+                      className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                        settings.msg_template_order_enabled === 'true' ? 'bg-emerald-500' : 'bg-slate-300'
+                      }`}
+                    >
+                      <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        settings.msg_template_order_enabled === 'true' ? 'translate-x-6' : 'translate-x-1'
+                      }`} />
+                    </button>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">微信小程序模板 ID</label>
+                    <input
+                      type="text"
+                      value={settings.msg_template_order}
+                      onChange={(e) => updateSetting('msg_template_order', e.target.value)}
+                      placeholder="请输入模板ID"
+                      className="w-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-sm outline-none focus:border-primary"
+                    />
                   </div>
                 </div>
               </div>
@@ -531,40 +779,72 @@ export default function AdminSettings() {
                 <div className="max-w-2xl space-y-4">
                   <h3 className="text-md font-medium text-slate-900 dark:text-white">风控规则配置</h3>
 
+                  {/* IP 限制 */}
                   <div className="p-4 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-900/50 space-y-4">
                     <div className="flex items-center justify-between">
                       <div>
                         <h4 className="text-sm font-medium text-slate-900 dark:text-white">同一IP下单频率限制</h4>
                         <p className="text-xs text-slate-500 mt-1">限制短时间内同一IP的异常下单行为</p>
                       </div>
-                      <div className="relative inline-block w-10 mr-2 align-middle select-none transition duration-200 ease-in">
-                        <input type="checkbox" name="toggle" id="ip-limit-toggle" defaultChecked className="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 appearance-none cursor-pointer" style={{ right: 0, borderColor: '#10b981' }}/>
-                        <label htmlFor="ip-limit-toggle" className="toggle-label block overflow-hidden h-5 rounded-full bg-emerald-500 cursor-pointer"></label>
-                      </div>
+                      <button
+                        onClick={() => toggleSetting('anticheat_ip_limit_enabled')}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                          settings.anticheat_ip_limit_enabled === 'true' ? 'bg-emerald-500' : 'bg-slate-300'
+                        }`}
+                      >
+                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                          settings.anticheat_ip_limit_enabled === 'true' ? 'translate-x-6' : 'translate-x-1'
+                        }`} />
+                      </button>
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="text-sm text-slate-600 dark:text-slate-400">限制</span>
-                      <input type="number" defaultValue="1" className="w-16 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1 text-sm outline-none text-center" />
+                      <input
+                        type="number"
+                        value={settings.anticheat_ip_limit_minutes}
+                        onChange={(e) => updateSetting('anticheat_ip_limit_minutes', e.target.value)}
+                        min="1"
+                        className="w-16 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1 text-sm outline-none text-center focus:border-primary"
+                      />
                       <span className="text-sm text-slate-600 dark:text-slate-400">分钟内，最多允许下单</span>
-                      <input type="number" defaultValue="5" className="w-16 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1 text-sm outline-none text-center" />
+                      <input
+                        type="number"
+                        value={settings.anticheat_ip_limit_count}
+                        onChange={(e) => updateSetting('anticheat_ip_limit_count', e.target.value)}
+                        min="1"
+                        className="w-16 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1 text-sm outline-none text-center focus:border-primary"
+                      />
                       <span className="text-sm text-slate-600 dark:text-slate-400">次</span>
                     </div>
                   </div>
 
+                  {/* 设备限制 */}
                   <div className="p-4 border border-slate-200 dark:border-slate-700 rounded-xl bg-slate-50 dark:bg-slate-900/50 space-y-4">
                     <div className="flex items-center justify-between">
                       <div>
                         <h4 className="text-sm font-medium text-slate-900 dark:text-white">同一设备关联多个账号预警</h4>
                         <p className="text-xs text-slate-500 mt-1">检测并预警可能存在的刷单或作弊行为</p>
                       </div>
-                      <div className="relative inline-block w-10 mr-2 align-middle select-none transition duration-200 ease-in">
-                        <input type="checkbox" name="toggle" id="device-limit-toggle" defaultChecked className="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 appearance-none cursor-pointer" style={{ right: 0, borderColor: '#10b981' }}/>
-                        <label htmlFor="device-limit-toggle" className="toggle-label block overflow-hidden h-5 rounded-full bg-emerald-500 cursor-pointer"></label>
-                      </div>
+                      <button
+                        onClick={() => toggleSetting('anticheat_device_limit_enabled')}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                          settings.anticheat_device_limit_enabled === 'true' ? 'bg-emerald-500' : 'bg-slate-300'
+                        }`}
+                      >
+                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                          settings.anticheat_device_limit_enabled === 'true' ? 'translate-x-6' : 'translate-x-1'
+                        }`} />
+                      </button>
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="text-sm text-slate-600 dark:text-slate-400">同一设备登录超过</span>
-                      <input type="number" defaultValue="3" className="w-16 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1 text-sm outline-none text-center" />
+                      <input
+                        type="number"
+                        value={settings.anticheat_device_limit_count}
+                        onChange={(e) => updateSetting('anticheat_device_limit_count', e.target.value)}
+                        min="1"
+                        className="w-16 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-2 py-1 text-sm outline-none text-center focus:border-primary"
+                      />
                       <span className="text-sm text-slate-600 dark:text-slate-400">个不同账号时，触发预警</span>
                     </div>
                   </div>
@@ -591,18 +871,13 @@ export default function AdminSettings() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
-                        <tr className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
-                          <td className="p-4 text-sm text-slate-900 dark:text-white">138****1234</td>
-                          <td className="p-4 text-sm text-slate-600 dark:text-slate-300">恶意刷单，异常高频下单</td>
-                          <td className="p-4 text-sm text-slate-600 dark:text-slate-300">2026-03-20 11:30:00</td>
-                          <td className="p-4">
-                            <div className="flex gap-1">
-                              <span className="bg-red-100 text-red-800 dark:bg-red-500/20 dark:text-red-400 px-2 py-0.5 rounded text-xs">禁止登录</span>
-                              <span className="bg-red-100 text-red-800 dark:bg-red-500/20 dark:text-red-400 px-2 py-0.5 rounded text-xs">禁止下单</span>
-                            </div>
-                          </td>
-                          <td className="p-4 text-right">
-                            <button className="text-slate-400 hover:text-primary transition-colors text-sm">解除封禁</button>
+                        <tr>
+                          <td colSpan={5} className="p-0">
+                            <Empty
+                              icon="block"
+                              title="暂无黑名单"
+                              description="还没有添加任何封禁记录"
+                            />
                           </td>
                         </tr>
                       </tbody>

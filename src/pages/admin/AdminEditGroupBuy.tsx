@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useToast } from '../../components/Toast';
-import { marketingApi } from '../../lib/api';
+import { adminApi } from '../../lib/api';
 import { CampaignStatus } from '../../types';
 
 interface Product {
@@ -49,23 +49,21 @@ export default function AdminEditGroupBuy() {
   const fetchGroupBuy = async () => {
     setLoading(true);
     try {
-      const res = await marketingApi.getGroupBuys();
+      const res = await adminApi.getGroupBuy(id!);
       if (res.success && res.data) {
-        const groupBuy = res.data.find((item: GroupBuy) => item.id === id);
-        if (groupBuy) {
-          setSelectedProduct(groupBuy.product || null);
-          setFormData({
-            name: '',
-            group_price: String(groupBuy.group_price || ''),
-            min_quantity: String(groupBuy.min_quantity || '2'),
-            start_time: groupBuy.start_time ? groupBuy.start_time.slice(0, 16) : '',
-            end_time: groupBuy.end_time ? groupBuy.end_time.slice(0, 16) : '',
-            description: ''
-          });
-        } else {
-          toast.error('团购活动不存在');
-          navigate('/admin/marketing');
-        }
+        const groupBuy = res.data;
+        setSelectedProduct(groupBuy.product || null);
+        setFormData({
+          name: '',
+          group_price: String(groupBuy.group_price || ''),
+          min_quantity: String(groupBuy.min_quantity || '2'),
+          start_time: groupBuy.start_time ? groupBuy.start_time.slice(0, 16) : '',
+          end_time: groupBuy.end_time ? groupBuy.end_time.slice(0, 16) : '',
+          description: ''
+        });
+      } else {
+        toast.error('团购活动不存在');
+        navigate('/admin/marketing');
       }
     } catch (error) {
       console.error('Get group buy error:', error);
@@ -99,9 +97,21 @@ export default function AdminEditGroupBuy() {
 
     setSaving(true);
     try {
-      toast.success('保存成功');
-      navigate('/admin/marketing');
+      const res = await adminApi.updateGroupBuy(id!, {
+        group_price: parseFloat(formData.group_price),
+        min_quantity: parseInt(formData.min_quantity),
+        start_time: new Date(formData.start_time).toISOString(),
+        end_time: new Date(formData.end_time).toISOString()
+      });
+
+      if (res.success) {
+        toast.success('保存成功');
+        navigate('/admin/marketing');
+      } else {
+        toast.error(res.error?.message || '保存失败');
+      }
     } catch (error) {
+      console.error('Update group buy error:', error);
       toast.error('保存失败');
     } finally {
       setSaving(false);

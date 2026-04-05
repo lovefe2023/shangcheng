@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { partnerApi } from '../lib/api';
-import { UserStatus, UserStatusLabel, PartnerLevel, PartnerLevelLabel } from '../types';
+import { PartnerLevelLabel, PartnerLevel, IncomeTypeLabel, IncomeStatusLabel, IncomeStatus } from '../types';
 
 interface PartnerProfile {
   id: string;
@@ -67,33 +67,26 @@ export default function Partner() {
 
   // 获取等级显示文本
   const getLevelDisplay = (level: string) => {
-    const levelMap: Record<string, string> = {
-      'none': '普通用户',
-      'junior': '初级合伙人',
-      'middle': '中级合伙人',
-      'senior': '金牌合伙人'
-    };
-    return levelMap[level] || '普通用户';
+    const levelKey = level as PartnerLevel;
+    return PartnerLevelLabel[levelKey] || '普通用户';
   };
 
   // 收益类型显示
   const getIncomeTypeLabel = (type: string) => {
-    const typeMap: Record<string, string> = {
-      'referral_reward': '推荐奖励',
-      'sales_commission': '销售提成',
-      'dividend': '销售分红'
-    };
-    return typeMap[type] || type;
+    const typeKey = type as IncomeType;
+    return IncomeTypeLabel[typeKey] || type;
   };
 
   // 收益状态显示
   const getIncomeStatusLabel = (status: string) => {
-    const statusMap: Record<string, { text: string; color: string }> = {
-      'pending': { text: '待结算', color: 'text-yellow-500' },
-      'settled': { text: '已结算', color: 'text-green-500' },
-      'completed': { text: '已完成', color: 'text-blue-500' }
+    const statusKey = status as IncomeStatus;
+    const text = IncomeStatusLabel[statusKey] || status;
+    const colorMap: Record<string, string> = {
+      'pending': 'text-yellow-500',
+      'settled': 'text-green-500',
+      'completed': 'text-blue-500'
     };
-    return statusMap[status] || { text: status, color: 'text-gray-500' };
+    return { text, color: colorMap[status] || 'text-gray-500' };
   };
 
   if (loading) {

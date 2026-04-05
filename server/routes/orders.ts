@@ -88,10 +88,22 @@ router.post('/cart', requireAuth, async (req: Request, res: Response) => {
       });
     }
 
+    // 验证数量
+    const validQuantity = Math.max(1, Math.floor(quantity));
+    if (validQuantity !== quantity) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'INVALID_QUANTITY',
+          message: '数量必须为正整数'
+        }
+      });
+    }
+
     // 检查商品是否存在且上架
     const { data: product, error: productError } = await supabaseAdmin
       .from('products')
-      .select('*')
+      .select('id, name, stock, status')
       .eq('id', product_id)
       .eq('status', 'on_shelves')
       .single();
@@ -107,17 +119,55 @@ router.post('/cart', requireAuth, async (req: Request, res: Response) => {
     }
 
     // 检查购物车中是否已有该商品
-    const { data: existingItem } = await supabaseAdmin
+    // 构建查询，正确处理 null spec
+    let query = supabaseAdmin
       .from('cart_items')
       .select('*')
       .eq('user_id', req.user!.id)
-      .eq('product_id', product_id)
-      .eq('spec', spec || null)
-      .single();
+      .eq('product_id', product_id);
+
+    if (spec) {
+      query = query.eq('spec', spec);
+    } else {
+      query = query.is('spec', null);
+    }
+
+    const { data: existingItems, error: queryError } = await query;
+
+    // 如果查询出错或找到多个重复项，取第一个并清理其他重复项
+    let existingItem = existingItems?.[0];
+
+    if (existingItems && existingItems.length > 1) {
+      // 发现多个重复项，清理多余的
+      const duplicateIds = existingItems.slice(1).map(item => item.id);
+      await supabaseAdmin
+        .from('cart_items')
+        .delete()
+        .in('id', duplicateIds);
+      // 合并重复项的数量
+      const totalQuantity = existingItems.reduce((sum, item) => sum + item.quantity, 0);
+      await supabaseAdmin
+        .from('cart_items')
+        .update({ quantity: Math.min(totalQuantity, product.stock) })
+        .eq('id', existingItem.id);
+      existingItem = { ...existingItem, quantity: Math.min(totalQuantity, product.stock) };
+    }
 
     if (existingItem) {
-      // 更新数量
-      const newQuantity = existingItem.quantity + quantity;
+      // 更新数量 - 验证不超过库存
+      const newQuantity = existingItem.quantity + validQuantity;
+      if (newQuantity > product.stock) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'QUANTITY_EXCEEDS_STOCK',
+            message: `库存不足，当前库存 ${product.stock} 件，购物车已有 ${existingItem.quantity} 件`,
+            stock: product.stock,
+            cart_quantity: existingItem.quantity
+          }
+        });
+      }
+
       const { error: updateError } = await supabaseAdmin
         .from('cart_items')
         .update({ quantity: newQuantity })
@@ -133,14 +183,25 @@ router.post('/cart', requireAuth, async (req: Request, res: Response) => {
         });
       }
     } else {
-      // 新增购物车项
+      // 新增购物车项 - 验证不超过库存
+      if (validQuantity > product.stock) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'QUANTITY_EXCEEDS_STOCK',
+            message: `库存不足，当前库存 ${product.stock} 件`,
+            stock: product.stock
+          }
+        });
+      }
+
       const { error: insertError } = await supabaseAdmin
         .from('cart_items')
         .insert({
           user_id: req.user!.id,
           product_id,
           spec,
-          quantity
+          quantity: validQuantity
         });
 
       if (insertError) {
@@ -178,6 +239,57 @@ router.put('/cart/:id', requireAuth, async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const { quantity, selected } = req.body;
+
+    // 如果更新数量，需要验证库存
+    if (quantity !== undefined) {
+      // 获取购物车项和商品信息
+      const { data: cartItem, error: cartError } = await supabaseAdmin
+        .from('cart_items')
+        .select(`
+          id,
+          product_id,
+          product:products(id, name, stock, status)
+        `)
+        .eq('id', id)
+        .eq('user_id', req.user!.id)
+        .single();
+
+      if (cartError || !cartItem) {
+        return res.status(404).json({
+          success: false,
+          error: {
+            code: 'CART_ITEM_NOT_FOUND',
+            message: '购物车项不存在'
+          }
+        });
+      }
+
+      const product = cartItem.product as any;
+
+      // 验证商品状态
+      if (!product || product.status !== 'on_shelves') {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'PRODUCT_NOT_AVAILABLE',
+            message: '商品已下架或不存在'
+          }
+        });
+      }
+
+      // 验证库存
+      const validQuantity = Math.max(1, Math.min(quantity, product.stock));
+      if (validQuantity !== quantity) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'QUANTITY_EXCEEDS_STOCK',
+            message: `库存不足，最多可购买 ${product.stock} 件`,
+            max_quantity: product.stock
+          }
+        });
+      }
+    }
 
     const updateData: any = {};
     if (quantity !== undefined) updateData.quantity = Math.max(1, quantity);
@@ -307,6 +419,69 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('Get orders error:', error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'SERVER_ERROR',
+        message: '服务器错误'
+      }
+    });
+  }
+});
+
+/**
+ * GET /api/orders/stats
+ * 获取订单统计
+ */
+router.get('/stats', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = req.user!.id;
+
+    // 统计各状态订单数量
+    const { data: pendingPayment } = await supabaseAdmin
+      .from('orders')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', userId)
+      .eq('status', 'pending_payment');
+
+    const { data: pendingShipment } = await supabaseAdmin
+      .from('orders')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', userId)
+      .eq('status', 'pending_shipment');
+
+    const { data: shipped } = await supabaseAdmin
+      .from('orders')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', userId)
+      .eq('status', 'shipped');
+
+    // 待评价：已完成且未评价的订单
+    const { data: completedOrders } = await supabaseAdmin
+      .from('orders')
+      .select('id, items:order_items(reviewed)')
+      .eq('user_id', userId)
+      .eq('status', 'completed');
+
+    let toReview = 0;
+    completedOrders?.forEach(order => {
+      const items = order.items as any[];
+      if (items && items.some(item => !item.reviewed)) {
+        toReview++;
+      }
+    });
+
+    res.json({
+      success: true,
+      data: {
+        pending_payment: (pendingPayment as any)?.length || 0,
+        pending_shipment: (pendingShipment as any)?.length || 0,
+        shipped: (shipped as any)?.length || 0,
+        to_review: toReview
+      }
+    });
+  } catch (error) {
+    console.error('Get order stats error:', error);
     res.status(500).json({
       success: false,
       error: {
@@ -474,6 +649,51 @@ router.post('/', requireAuth, async (req: Request, res: Response) => {
 
     const paidAmount = totalAmount - discountAmount;
 
+    // 计算销售佣金
+    let salesCommission = 0;
+    if (referrer_id) {
+      try {
+        // 获取推荐人信息
+        const { data: referrerUser } = await supabaseAdmin
+          .from('users')
+          .select('id, is_partner, partner_level')
+          .eq('id', referrer_id)
+          .single();
+
+        // 只有合伙人才有佣金
+        if (referrerUser?.is_partner && referrerUser.partner_level !== 'none') {
+          // 获取佣金比例配置
+          const { data: settings } = await supabaseAdmin
+            .from('settings')
+            .select('key, value')
+            .like('key', 'partner_commission_%');
+
+          // 根据合伙人等级获取佣金比例
+          const commissionKey = `partner_commission_${referrerUser.partner_level}`;
+          const commissionSetting = settings?.find(s => s.key === commissionKey);
+
+          if (commissionSetting?.value) {
+            const rate = parseFloat(commissionSetting.value) / 100; // 百分比转小数
+            if (!isNaN(rate) && rate > 0) {
+              salesCommission = Math.round(paidAmount * rate * 100) / 100; // 保留两位小数
+            }
+          } else {
+            // 默认佣金比例（如果未配置）
+            const defaultRates: Record<string, number> = {
+              'junior': 0.05,  // 5%
+              'middle': 0.10,  // 10%
+              'senior': 0.15   // 15%
+            };
+            const defaultRate = defaultRates[referrerUser.partner_level] || 0.05;
+            salesCommission = Math.round(paidAmount * defaultRate * 100) / 100;
+          }
+        }
+      } catch (err) {
+        console.error('Calculate sales commission error:', err);
+        // 佣金计算失败不影响订单创建
+      }
+    }
+
     // 生成订单号
     const orderNo = `ORD${Date.now()}${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
@@ -487,6 +707,7 @@ router.post('/', requireAuth, async (req: Request, res: Response) => {
         total_amount: totalAmount,
         paid_amount: paidAmount,
         discount_amount: discountAmount,
+        sales_commission: salesCommission,
         address_snapshot: {
           name: address.name,
           phone: address.phone,
@@ -533,6 +754,34 @@ router.post('/', requireAuth, async (req: Request, res: Response) => {
           message: '创建订单商品失败'
         }
       });
+    }
+
+    // 扣减库存 (使用条件更新实现原子操作，防止超卖)
+    for (const item of cartItems) {
+      // 使用条件更新：只有当 stock >= quantity 时才更新
+      const { data: updateResult, error: stockError } = await supabaseAdmin
+        .from('products')
+        .update({
+          stock: item.product.stock - item.quantity,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', item.product_id)
+        .gte('stock', item.quantity) // 条件：库存充足
+        .select('stock');
+
+      if (stockError || !updateResult || updateResult.length === 0) {
+        console.error('Stock update failed for product:', item.product_id, stockError);
+        // 回滚订单和订单商品
+        await supabaseAdmin.from('order_items').delete().eq('order_id', order.id);
+        await supabaseAdmin.from('orders').delete().eq('id', order.id);
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'STOCK_INSUFFICIENT',
+            message: `商品 ${item.product.name} 库存不足`
+          }
+        });
+      }
     }
 
     // 删除购物车项

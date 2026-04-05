@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { authApi, partnerApi, ordersApi } from '../lib/api';
 import { UserStatus, PartnerLevel, PartnerLevelLabel } from '../types';
+import { useToast } from '../components/Toast';
 
 interface UserProfile {
   id: string;
@@ -23,6 +24,7 @@ interface OrderStats {
 }
 
 export default function Profile() {
+  const toast = useToast();
   const [user, setUser] = useState<UserProfile | null>(null);
   const [orderStats, setOrderStats] = useState<OrderStats>({
     pending_payment: 0,
@@ -43,20 +45,25 @@ export default function Profile() {
       const userRes = await authApi.getMe();
       if (userRes.success && userRes.data) {
         setUser(userRes.data);
+      } else if (userRes.error?.code === 'UNAUTHORIZED') {
+        // 未登录，跳转登录页
+        window.location.href = '/login';
+        return;
       }
 
       // 获取订单统计
-      const ordersRes = await ordersApi.getList({ page: 1, pageSize: 1 });
-      if (ordersRes.success && ordersRes.data) {
+      const statsRes = await ordersApi.getStats();
+      if (statsRes.success && statsRes.data) {
         setOrderStats({
-          pending_payment: ordersRes.data.pending_payment || 0,
-          pending_shipment: ordersRes.data.pending_shipment || 0,
-          shipped: ordersRes.data.shipped || 0,
-          to_review: ordersRes.data.to_review || 0
+          pending_payment: statsRes.data.pending_payment || 0,
+          pending_shipment: statsRes.data.pending_shipment || 0,
+          shipped: statsRes.data.shipped || 0,
+          to_review: statsRes.data.to_review || 0
         });
       }
     } catch (error) {
       console.error('获取用户信息失败:', error);
+      toast.error('加载失败，请重试');
     } finally {
       setLoading(false);
     }

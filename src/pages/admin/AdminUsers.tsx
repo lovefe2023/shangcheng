@@ -6,6 +6,40 @@ import { useToast } from '../../components/Toast';
 import { adminApi } from '../../lib/api';
 import { UserStatus, UserStatusLabel, PartnerLevel, PartnerLevelLabel } from '../../types';
 
+// API 错误处理
+interface ApiError {
+  code?: string;
+  message?: string;
+}
+
+const handleApiError = (
+  error: any,
+  toast: ReturnType<typeof useToast>,
+  navigate: ReturnType<typeof useNavigate>,
+  defaultMessage: string = '操作失败'
+): boolean => {
+  const apiError = error?.error as ApiError | undefined;
+  const errorCode = apiError?.code || error?.code;
+  const errorMessage = apiError?.message || error?.message;
+
+  if (errorCode === 'UNAUTHORIZED' || errorCode === 'INVALID_TOKEN' || errorCode === 'TOKEN_EXPIRED') {
+    toast.error('登录已过期，请重新登录');
+    localStorage.removeItem('token');
+    localStorage.removeItem('user');
+    navigate('/login?redirect=/admin/users');
+    return true;
+  }
+
+  if (errorCode === 'FORBIDDEN' || errorCode === 'ADMIN_REQUIRED') {
+    toast.error('您没有权限执行此操作');
+    navigate('/');
+    return true;
+  }
+
+  toast.error(errorMessage || defaultMessage);
+  return false;
+};
+
 interface User {
   id: string;
   name: string;
@@ -26,6 +60,7 @@ export default function AdminUsers() {
   // Data states
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
+  const [togglingIds, setTogglingIds] = useState<Set<string>>(new Set());
 
   // Filter states
   const [searchQuery, setSearchQuery] = useState('');
@@ -60,23 +95,33 @@ export default function AdminUsers() {
         setUsers(res.data.list || []);
         setTotal(res.data.total || 0);
       } else {
-        toast.error('获取用户列表失败');
+        handleApiError(res, toast, navigate, '获取用户列表失败');
       }
     } catch (error) {
       console.error('Get users error:', error);
-      toast.error('获取用户列表失败');
+      handleApiError(error, toast, navigate, '获取用户列表失败');
     } finally {
       setLoading(false);
     }
   };
 
   const handleSearch = () => {
+    // 验证日期范围
+    if (startDate && endDate && new Date(startDate) > new Date(endDate)) {
+      toast.error('开始日期不能晚于结束日期');
+      return;
+    }
     setPage(1);
     fetchUsers();
   };
 
   const toggleStatus = async (id: string, currentStatus: UserStatus) => {
+    // 防止重复点击
+    if (togglingIds.has(id)) return;
+
     const newStatus = currentStatus === UserStatus.ACTIVE ? UserStatus.FROZEN : UserStatus.ACTIVE;
+
+    setTogglingIds(prev => new Set(prev).add(id));
     try {
       const res = await adminApi.updateUserStatus(id, newStatus);
       if (res.success) {
@@ -85,10 +130,16 @@ export default function AdminUsers() {
         ));
         toast.success(`用户状态已更新为: ${UserStatusLabel[newStatus]}`);
       } else {
-        toast.error('操作失败');
+        handleApiError(res, toast, navigate, '操作失败');
       }
     } catch (error) {
-      toast.error('操作失败');
+      handleApiError(error, toast, navigate, '操作失败');
+    } finally {
+      setTogglingIds(prev => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
     }
   };
 
@@ -104,13 +155,7 @@ export default function AdminUsers() {
     <div className="max-w-7xl mx-auto pb-12">
       <div className="flex justify-between items-center mb-6">
         <h1 className="text-2xl font-bold text-slate-900 dark:text-white">用户管理</h1>
-        <button
-          onClick={() => navigate('/admin/users/add')}
-          className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors shadow-sm"
-        >
-          <span className="material-symbols-outlined text-[20px]">person_add</span>
-          添加用户
-        </button>
+        {/* 用户通过注册流程添加，不提供后台手动添加功能 */}
       </div>
 
       <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden">
@@ -266,11 +311,12 @@ export default function AdminUsers() {
                         </button>
                         <button
                           onClick={() => toggleStatus(user.id, user.status)}
-                          className={`text-sm font-medium px-2 py-1 rounded hover:underline ${
+                          disabled={togglingIds.has(user.id)}
+                          className={`text-sm font-medium px-2 py-1 rounded hover:underline disabled:opacity-50 disabled:cursor-not-allowed ${
                             user.status === UserStatus.ACTIVE ? 'text-red-500' : 'text-emerald-500'
                           }`}
                         >
-                          {user.status === UserStatus.ACTIVE ? '冻结' : '解冻'}
+                          {togglingIds.has(user.id) ? '处理中...' : (user.status === UserStatus.ACTIVE ? '冻结' : '解冻')}
                         </button>
                       </div>
                     </td>

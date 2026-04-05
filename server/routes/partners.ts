@@ -17,7 +17,7 @@ router.get('/profile', requireAuth, async (req: Request, res: Response) => {
   try {
     const { data: user, error } = await supabaseAdmin
       .from('users')
-      .select('*')
+      .select('id, phone, name, avatar, status, is_partner, partner_level, referrer_id, invite_code, balance, total_income, created_at, updated_at, gender, birthday, email')
       .eq('id', req.user!.id)
       .single();
 
@@ -298,12 +298,81 @@ router.post('/withdraw', requireAuth, async (req: Request, res: Response) => {
   try {
     const { amount, method, account_info } = req.body;
 
+    // 验证提现金额
     if (!amount || amount <= 0) {
       return res.status(400).json({
         success: false,
         error: {
           code: 'INVALID_AMOUNT',
           message: '请输入正确的提现金额'
+        }
+      });
+    }
+
+    // 最小提现金额验证
+    const MIN_WITHDRAWAL_AMOUNT = 10;
+    if (amount < MIN_WITHDRAWAL_AMOUNT) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'AMOUNT_TOO_SMALL',
+          message: `最低提现金额为${MIN_WITHDRAWAL_AMOUNT}元`
+        }
+      });
+    }
+
+    // 最大提现金额验证
+    const MAX_WITHDRAWAL_AMOUNT = 50000;
+    if (amount > MAX_WITHDRAWAL_AMOUNT) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'AMOUNT_TOO_LARGE',
+          message: `单次最高提现金额为${MAX_WITHDRAWAL_AMOUNT}元`
+        }
+      });
+    }
+
+    // 验证提现方式
+    const VALID_METHODS = ['alipay', 'wechat', 'bank'];
+    if (!method || !VALID_METHODS.includes(method)) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'INVALID_METHOD',
+          message: '请选择有效的提现方式（支付宝、微信、银行卡）'
+        }
+      });
+    }
+
+    // 验证账户信息
+    if (!account_info || typeof account_info !== 'object') {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'INVALID_ACCOUNT_INFO',
+          message: '请填写完整的收款账户信息'
+        }
+      });
+    }
+
+    // 根据提现方式验证必填字段
+    const requiredFields: Record<string, string[]> = {
+      alipay: ['account', 'name'],
+      wechat: ['account'],
+      bank: ['account', 'name', 'bank_name']
+    };
+
+    const missingFields = requiredFields[method]?.filter(
+      field => !account_info[field]
+    ) || [];
+
+    if (missingFields.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'MISSING_ACCOUNT_FIELDS',
+          message: `请填写${missingFields.join('、')}信息`
         }
       });
     }
@@ -315,12 +384,12 @@ router.post('/withdraw', requireAuth, async (req: Request, res: Response) => {
       .eq('id', req.user!.id)
       .single();
 
-    if (!user || user.balance < amount) {
-      return res.status(400).json({
+    if (!user) {
+      return res.status(404).json({
         success: false,
         error: {
-          code: 'INSUFFICIENT_BALANCE',
-          message: '余额不足'
+          code: 'USER_NOT_FOUND',
+          message: '用户不存在'
         }
       });
     }
@@ -335,6 +404,26 @@ router.post('/withdraw', requireAuth, async (req: Request, res: Response) => {
       });
     }
 
+    // 检查今日提现次数限制
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const { count: todayWithdrawals } = await supabaseAdmin
+      .from('withdrawals')
+      .select('*', { count: 'exact', head: true })
+      .eq('user_id', req.user!.id)
+      .gte('created_at', today.toISOString());
+
+    const MAX_DAILY_WITHDRAWALS = 5;
+    if ((todayWithdrawals || 0) >= MAX_DAILY_WITHDRAWALS) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'DAILY_LIMIT_EXCEEDED',
+          message: `每日最多提现${MAX_DAILY_WITHDRAWALS}次，请明天再试`
+        }
+      });
+    }
+
     // 计算手续费 (0.3%)
     const feeRate = 0.003;
     const fee = Math.ceil(amount * feeRate * 100) / 100;
@@ -342,6 +431,23 @@ router.post('/withdraw', requireAuth, async (req: Request, res: Response) => {
 
     // 生成提现单号
     const withdrawalNo = `WD${Date.now()}${Math.random().toString(36).substring(2, 5).toUpperCase()}`;
+
+    // 使用数据库函数原子扣减余额
+    const { data: balanceResult, error: balanceError } = await supabaseAdmin
+      .rpc('decrease_user_balance', {
+        p_user_id: req.user!.id,
+        p_amount: amount
+      });
+
+    if (balanceError || !balanceResult?.success) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'INSUFFICIENT_BALANCE',
+          message: balanceResult?.message || '余额不足'
+        }
+      });
+    }
 
     // 创建提现记录
     const { data: withdrawal, error } = await supabaseAdmin
@@ -360,6 +466,12 @@ router.post('/withdraw', requireAuth, async (req: Request, res: Response) => {
       .single();
 
     if (error) {
+      // 回滚余额：使用数据库函数原子增加
+      await supabaseAdmin.rpc('increment_user_balance', {
+        user_id: req.user!.id,
+        amount: amount
+      });
+
       return res.status(500).json({
         success: false,
         error: {
@@ -368,12 +480,6 @@ router.post('/withdraw', requireAuth, async (req: Request, res: Response) => {
         }
       });
     }
-
-    // 冻结用户余额
-    await supabaseAdmin
-      .from('users')
-      .update({ balance: user.balance - amount })
-      .eq('id', req.user!.id);
 
     res.json({
       success: true,

@@ -6,27 +6,41 @@
 import { Router, Request, Response } from 'express';
 import { supabaseAdmin } from '../utils/supabase';
 import { requireAuth } from '../middleware/auth';
-import crypto from 'crypto';
+import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 
 const router = Router();
 
-// JWT 密钥
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+// JWT 密钥 - 延迟检查，确保环境变量已加载
+const getJwtSecret = (): string => {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error('JWT_SECRET 环境变量未配置');
+  }
+  return secret;
+};
 
-// 简单的密码哈希函数
-const hashPassword = (password: string): string => {
-  return crypto.createHash('sha256').update(password).digest('hex');
+// bcrypt 盐值轮数 (12 是推荐的安全值)
+const BCRYPT_SALT_ROUNDS = 12;
+
+// 安全的密码哈希函数 (使用 bcrypt)
+const hashPassword = async (password: string): Promise<string> => {
+  return bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
+};
+
+// 验证密码函数
+const verifyPassword = async (password: string, hash: string): Promise<boolean> => {
+  return bcrypt.compare(password, hash);
 };
 
 // 生成 JWT token
 const generateToken = (userId: string): string => {
-  return jwt.sign({ userId }, JWT_SECRET, { expiresIn: '7d' });
+  return jwt.sign({ userId }, getJwtSecret(), { expiresIn: '7d' });
 };
 
 // 生成 refresh token
 const generateRefreshToken = (userId: string): string => {
-  return jwt.sign({ userId, type: 'refresh' }, JWT_SECRET, { expiresIn: '30d' });
+  return jwt.sign({ userId, type: 'refresh' }, getJwtSecret(), { expiresIn: '30d' });
 };
 
 /**
@@ -109,7 +123,7 @@ router.post('/register', async (req: Request, res: Response) => {
       .from('users')
       .insert({
         phone,
-        password_hash: hashPassword(password),
+        password_hash: await hashPassword(password),
         name: name || `用户${phone.slice(-4)}`,
         referrer_id: referrerId,
         invite_code: userInviteCode,
@@ -197,9 +211,9 @@ router.post('/login', async (req: Request, res: Response) => {
       });
     }
 
-    // 验证密码
-    const passwordHash = hashPassword(password);
-    if (user.password_hash !== passwordHash) {
+    // 验证密码 (使用 bcrypt 安全比较)
+    const isValidPassword = await verifyPassword(password, user.password_hash);
+    if (!isValidPassword) {
       return res.status(401).json({
         success: false,
         error: {
@@ -278,7 +292,7 @@ router.get('/me', requireAuth, async (req: Request, res: Response) => {
   try {
     const { data: user, error } = await supabaseAdmin
       .from('users')
-      .select('*')
+      .select('id, phone, name, avatar, status, is_partner, partner_level, referrer_id, invite_code, balance, total_income, created_at, updated_at, gender, birthday, email')
       .eq('id', req.user!.id)
       .single();
 
@@ -302,10 +316,15 @@ router.get('/me', requireAuth, async (req: Request, res: Response) => {
       .select('*', { count: 'exact', head: true })
       .eq('referrer_id', user.id);
 
+    // 管理员角色判断 (根据 ADMIN_PHONES 环境变量)
+    const adminPhones = (process.env.ADMIN_PHONES || '').split(',').filter(p => p.trim());
+    const role = adminPhones.includes(user.phone) ? 'admin' : 'user';
+
     res.json({
       success: true,
       data: {
         ...user,
+        role,
         team_size: teamSize || 0
       }
     });
@@ -414,7 +433,19 @@ router.put('/password', requireAuth, async (req: Request, res: Response) => {
       .eq('id', req.user!.id)
       .single();
 
-    if (!user || user.password_hash !== hashPassword(oldPassword)) {
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: {
+          code: 'USER_NOT_FOUND',
+          message: '用户不存在'
+        }
+      });
+    }
+
+    // 验证原密码 (使用 bcrypt)
+    const isValidPassword = await verifyPassword(oldPassword, user.password_hash);
+    if (!isValidPassword) {
       return res.status(400).json({
         success: false,
         error: {
@@ -424,10 +455,10 @@ router.put('/password', requireAuth, async (req: Request, res: Response) => {
       });
     }
 
-    // 更新密码
+    // 更新密码 (使用 bcrypt 哈希)
     const { error: updateError } = await supabaseAdmin
       .from('users')
-      .update({ password_hash: hashPassword(newPassword) })
+      .update({ password_hash: await hashPassword(newPassword) })
       .eq('id', req.user!.id);
 
     if (updateError) {

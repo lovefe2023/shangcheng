@@ -218,8 +218,8 @@ export default function AdminProducts() {
   };
 
   const fetchCategories = async (forceRefresh: boolean = false) => {
-    // 如果正在加载且不是强制刷新，则跳过
-    if (categoriesLoading && !forceRefresh) return;
+    // 只有在已加载过数据且不是强制刷新时才跳过
+    if (categories.length > 0 && !forceRefresh && !categoriesLoading) return;
 
     setCategoriesLoading(true);
     try {

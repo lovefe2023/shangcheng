@@ -17,12 +17,14 @@ import Products from './pages/Products';
 import ProductDetails from './pages/ProductDetails';
 import OrderDetails from './pages/OrderDetails';
 import Settings from './pages/Settings';
+import AccountSettings from './pages/AccountSettings';
 import PersonalInfo from './pages/PersonalInfo';
 import MemberDetails from './pages/MemberDetails';
 import Sales from './pages/Sales';
 import PartnerRecruit from './pages/PartnerRecruit';
 import PartnerRecruitDetails from './pages/PartnerRecruitDetails';
 import PartnerInvite from './pages/PartnerInvite';
+import PartnerIncome from './pages/PartnerIncome';
 import Checkout from './pages/Checkout';
 import Payment from './pages/Payment';
 import Addresses from './pages/Addresses';
@@ -135,6 +137,7 @@ export default function App() {
           <Route path="partner/recruit" element={<PartnerRecruit />} />
           <Route path="partner/recruit/details" element={<PartnerRecruitDetails />} />
           <Route path="partner/invite" element={<PartnerInvite />} />
+          <Route path="partner/income" element={<PartnerIncome />} />
           <Route path="partner/new-today" element={<NewPartnersToday />} />
           <Route path="leaderboard" element={<Leaderboard />} />
           <Route path="my-cellar" element={<MyCellar />} />
@@ -147,7 +150,8 @@ export default function App() {
           <Route path="product/:id" element={<ProductDetails />} />
           <Route path="order/:id" element={<OrderDetails />} />
           <Route path="settings" element={<Settings />} />
-          <Route path="settings/profile" element={<PersonalInfo />} />
+          <Route path="settings/account" element={<AccountSettings />} />
+          <Route path="personal-info" element={<PersonalInfo />} />
           <Route path="addresses" element={<Addresses />} />
           <Route path="login" element={<Login />} />
           <Route path="register" element={<Register />} />

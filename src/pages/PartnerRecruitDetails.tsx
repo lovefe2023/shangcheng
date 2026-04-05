@@ -1,23 +1,57 @@
-import { Link } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { partnerApi } from '../lib/api';
+
+interface Settings {
+  partner_package_price?: number;
+  commission_rate_junior?: number;
+  commission_rate_middle?: number;
+  commission_rate_senior?: number;
+}
 
 export default function PartnerRecruitDetails() {
+  const navigate = useNavigate();
+  const [settings, setSettings] = useState<Settings>({});
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    loadSettings();
+  }, []);
+
+  const loadSettings = async () => {
+    try {
+      // 尝试获取设置（如果后端有这个 API）
+      const res = await fetch('/api/admin/settings');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.data) {
+          setSettings(data.data);
+        }
+      }
+    } catch (err) {
+      console.error('Load settings error:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // 获取门槛价格
+  const packagePrice = settings.partner_package_price || 3398;
+  // 获取佣金比例
+  const commissionRate = settings.commission_rate_senior || 20;
+
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-[#fafafa] text-[#1a1a1a] relative font-sans">
       <header className="shrink-0 sticky top-0 z-50 px-4 py-3">
         <div className="bg-white/80 backdrop-blur-md border border-white/40 rounded-2xl px-4 py-2 flex items-center justify-between shadow-[0_10px_25px_-5px_rgba(0,0,0,0.05),0_8px_10px_-6px_rgba(0,0,0,0.05)]">
-          <div className="flex items-center space-x-3">
-            <div className="relative">
-              <img alt="Inviter Avatar" className="w-9 h-9 rounded-full border-2 border-[#991b1b]/20" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBpH8Yq1cdjXHoxw0kH3ynA77VT5OEVN3hn1p5gdlXKMZkuAWQkc4dwmiUYwTQdmxhxfA-nrFZvCa-RBN-kH9EX2UVpq7Aq4nMh8vxj-I-UH0q6tliXvDjBJBsjVoYa-VfRhM134CEmnv2eOJMC9jAeN-TVJYnUWl6b2HUycpBuKzfb-Qcm2UPBOhZMaCJCbJErRCoH-Fki41WPfNsOSg9k0CXgoNK-BkUm32ikNcuoI-d9L40HgcmyKMeefEtP6Jn4SjX7qVKuocw"/>
-              <span className="absolute -bottom-1 -right-1 bg-[#991b1b] text-white text-[8px] px-1 rounded-full border border-white">VIP</span>
-            </div>
-            <div className="flex flex-col">
-              <span className="text-xs font-bold text-gray-800">张三邀请你加入合伙人</span>
-              <span className="text-[10px] text-gray-400">携手共创电商未来</span>
-            </div>
-          </div>
-          <div className="text-[11px] text-gray-500 bg-gray-100 px-2 py-1 rounded-lg">
-            已成功邀请 <span className="text-[#991b1b] font-bold">12</span> 位
-          </div>
+          <button
+            onClick={() => navigate(-1)}
+            className="flex items-center justify-center p-1.5 hover:bg-slate-100 rounded-full transition-colors"
+          >
+            <span className="material-symbols-outlined text-slate-700">arrow_back</span>
+          </button>
+          <span className="text-xs font-bold text-gray-800">合伙人招募详情</span>
+          <div className="w-8"></div>
         </div>
       </header>
 
@@ -78,7 +112,7 @@ export default function PartnerRecruitDetails() {
                 <span className="material-symbols-outlined text-xl">savings</span>
               </div>
               <p className="text-xs font-bold text-gray-800 mb-1">佣金收益</p>
-              <p className="text-[10px] text-gray-400">20%销售提成</p>
+              <p className="text-[10px] text-gray-400">{commissionRate}%销售提成</p>
             </div>
             <div className="bg-white p-4 rounded-2xl border border-gray-50 text-center shadow-[0_10px_25px_-5px_rgba(0,0,0,0.05),0_8px_10px_-6px_rgba(0,0,0,0.05)]">
               <div className="w-10 h-10 bg-gradient-to-br from-red-600 to-red-800 rounded-xl flex items-center justify-center mx-auto mb-3 shadow-lg shadow-red-200 text-white">
@@ -132,7 +166,7 @@ export default function PartnerRecruitDetails() {
                 <span className="material-symbols-outlined">redeem</span>
               </div>
               <div className="flex-grow bg-gradient-to-r from-[#991b1b]/5 to-white p-4 rounded-2xl border-l-4 border-[#991b1b] flex justify-between items-center shadow-[0_10px_25px_-5px_rgba(0,0,0,0.05),0_8px_10px_-6px_rgba(0,0,0,0.05)]">
-                <span className="font-extrabold text-sm text-gray-800">第三阶段：获得 20% 佣金</span>
+                <span className="font-extrabold text-sm text-gray-800">第三阶段：获得 {commissionRate}% 佣金</span>
                 <span className="text-[10px] font-bold text-[#991b1b]">获利</span>
               </div>
             </div>
@@ -155,50 +189,15 @@ export default function PartnerRecruitDetails() {
         </section>
 
         <section className="mt-16 px-6">
-          <div className="flex items-center justify-between mb-6">
-            <h3 className="text-lg font-extrabold text-gray-800">精英合伙人见证</h3>
-            <span className="text-[#991b1b] text-[10px] font-bold bg-red-50 px-2 py-0.5 rounded">已有2000+加入</span>
-          </div>
-          <div className="space-y-4">
-            <div className="bg-white p-5 rounded-3xl border border-gray-50 flex items-center space-x-4 shadow-[0_10px_25px_-5px_rgba(0,0,0,0.05),0_8px_10px_-6px_rgba(0,0,0,0.05)]">
-              <img alt="User" className="w-14 h-14 rounded-2xl object-cover shadow-md" src="https://lh3.googleusercontent.com/aida-public/AB6AXuDygH4x5HTJpZ0zOcXQqmCsKg4BVhWAikTR-FWVoPzdCHlvNxuyrdOt7qoYFTEHdz0dOpwAiDK4NcQ7sHYFaejFtC4zHOjrT4NZijvrGRNjUodLFiwq_puHdy4nYDZMRvBAUSKZwjdgCrvDmgNlA6QR3rcXzwThyFlewwdxQCcWeReGQXfu19BHbL7tDfQuMIs8fXJsQmbpz-kNRww3HBH1m2bswIe7NT0yZTLZVHyGfZFleYvogPYNAcwxDq9MS2UOZiJFvB9o1aM"/>
-              <div className="flex-grow">
-                <div className="flex justify-between items-start mb-1">
-                  <p className="font-extrabold text-gray-800 text-sm">李先生</p>
-                  <span className="text-[10px] text-gray-400">已加入 185天</span>
-                </div>
-                <p className="text-[10px] text-gray-500 mb-2">团队规模：38人精英团队</p>
-                <div className="flex items-center text-[#991b1b] font-bold text-sm">
-                  <span className="text-[10px] font-normal mr-1">累计收益:</span> ¥56,000.00
-                </div>
-              </div>
-            </div>
-            <div className="bg-white p-5 rounded-3xl border border-gray-50 flex items-center space-x-4 shadow-[0_10px_25px_-5px_rgba(0,0,0,0.05),0_8px_10px_-6px_rgba(0,0,0,0.05)]">
-              <img alt="User" className="w-14 h-14 rounded-2xl object-cover shadow-md" src="https://lh3.googleusercontent.com/aida-public/AB6AXuD1ds40fHbIBxo5udR6e2w0tzgZjVLAvBxZ_JUO2puNolZijxa6TvZcBsMtnLyeCnZVj1hBBhp-OQ4STo6fDBOz_uhOlI9BCGgMpmrRRZYA-50kmkoB6lvWpze6SPJHpwy4Q29kEd1u8nTboO1GCUmk24cwDvSl3zuLxvDKCkoz0FbHm_iFiQfzOxz5wajPjo9FPej3PeV8Uh4fZtYam0Ny5JHZ6SPEUUpP8zbazQ_9NWdyjZTYIgA2U8gjymlqmyafS35jtmK4R5E"/>
-              <div className="flex-grow">
-                <div className="flex justify-between items-start mb-1">
-                  <p className="font-extrabold text-gray-800 text-sm">王女士</p>
-                  <span className="text-[10px] text-gray-400">已加入 92天</span>
-                </div>
-                <p className="text-[10px] text-gray-500 mb-2">团队规模：25人稳定团队</p>
-                <div className="flex items-center text-[#991b1b] font-bold text-sm">
-                  <span className="text-[10px] font-normal mr-1">累计收益:</span> ¥32,000.00
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section className="mt-16 px-6">
           <div className="bg-gradient-to-br from-red-50 to-white border border-red-100 rounded-[2.5rem] p-10 text-center relative overflow-hidden">
             <div className="absolute -top-4 -right-4 w-24 h-24 bg-[#991b1b]/5 rounded-full"></div>
             <h3 className="text-sm font-bold text-gray-600 mb-4 tracking-widest uppercase">合伙人准入门槛</h3>
             <div className="flex items-baseline justify-center mb-6">
               <span className="text-2xl font-bold text-[#991b1b] mr-1">¥</span>
-              <span className="text-6xl font-black text-[#991b1b] tracking-tighter">3398</span>
+              <span className="text-6xl font-black text-[#991b1b] tracking-tighter">{packagePrice.toLocaleString()}</span>
             </div>
             <div className="inline-block px-4 py-2 bg-white rounded-2xl shadow-sm border border-red-50 mb-4">
-              <p className="text-xs font-bold text-gray-700 italic">“一次投入，终身获益”</p>
+              <p className="text-xs font-bold text-gray-700 italic">"一次投入，终身获益"</p>
             </div>
             <div className="space-y-1 text-gray-400 text-[11px] font-medium">
               <p>包含：品牌授权、导师指导、现成素材包</p>
@@ -250,7 +249,7 @@ export default function PartnerRecruitDetails() {
             <span className="material-symbols-outlined mr-2">verified_user</span>
             立即成为合伙人
           </span>
-          <span className="text-white/80 font-normal">¥3398</span>
+          <span className="text-white/80 font-normal">¥{packagePrice.toLocaleString()}</span>
         </Link>
       </div>
     </div>

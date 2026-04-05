@@ -7,8 +7,19 @@ import { Request, Response, NextFunction } from 'express';
 import { supabaseAdmin } from '../utils/supabase';
 import jwt from 'jsonwebtoken';
 
-// JWT 密钥
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+// 延迟获取 JWT 密钥
+const getJwtSecret = (): string => {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) {
+    throw new Error('JWT_SECRET 环境变量未配置');
+  }
+  return secret;
+};
+
+// 管理员手机号列表 - 延迟获取确保环境变量已加载
+const getAdminPhones = (): string[] => {
+  return (process.env.ADMIN_PHONES || '').split(',').filter(p => p.trim());
+};
 
 // 扩展 Request 类型
 declare global {
@@ -50,7 +61,7 @@ export const requireAuth = async (
     // 验证 JWT token
     let decoded: any;
     try {
-      decoded = jwt.verify(token, JWT_SECRET);
+      decoded = jwt.verify(token, getJwtSecret());
     } catch (err) {
       return res.status(401).json({
         success: false,
@@ -89,12 +100,13 @@ export const requireAuth = async (
       });
     }
 
-    // 设置用户信息到请求对象
+    // 设置用户信息到请求对象，根据手机号判断管理员角色
+    const role = getAdminPhones().includes(userProfile.phone) ? 'admin' : 'user';
     req.user = {
       id: userProfile.id,
       phone: userProfile.phone,
       name: userProfile.name,
-      role: 'user'
+      role
     };
 
     next();
@@ -120,17 +132,25 @@ export const requireAdmin = async (
 ) => {
   try {
     // 首先验证用户是否登录
-    await requireAuth(req, res, () => {});
+    await new Promise<void>((resolve, reject) => {
+      requireAuth(req, res, (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
 
     if (!req.user) {
-      return;
+      return res.status(401).json({
+        success: false,
+        error: {
+          code: 'UNAUTHORIZED',
+          message: '请先登录'
+        }
+      });
     }
 
     // 检查是否是管理员
-    // 这里简单判断，实际项目中应该有专门的 admin 表或 role 字段
-    const adminPhones = (process.env.ADMIN_PHONES || '').split(',');
-
-    if (!adminPhones.includes(req.user.phone)) {
+    if (!getAdminPhones().includes(req.user.phone)) {
       return res.status(403).json({
         success: false,
         error: {
@@ -169,7 +189,7 @@ export const optionalAuth = async (
       const token = authHeader.substring(7);
 
       try {
-        const decoded: any = jwt.verify(token, JWT_SECRET);
+        const decoded: any = jwt.verify(token, getJwtSecret());
 
         const { data: userProfile } = await supabaseAdmin
           .from('users')
@@ -178,11 +198,13 @@ export const optionalAuth = async (
           .single();
 
         if (userProfile) {
+          // 设置管理员角色
+          const role = getAdminPhones().includes(userProfile.phone) ? 'admin' : 'user';
           req.user = {
             id: userProfile.id,
             phone: userProfile.phone,
             name: userProfile.name,
-            role: 'user'
+            role
           };
         }
       } catch (err) {

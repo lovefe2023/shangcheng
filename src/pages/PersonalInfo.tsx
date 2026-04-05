@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { authApi } from '../lib/api';
 import { useToast } from '../components/Toast';
+import { Gender, GenderOptions } from '../types';
 
 interface User {
   id: string;
@@ -242,7 +243,7 @@ export default function PersonalInfo() {
                 />
               ) : editField === 'gender' ? (
                 <div className="flex gap-4">
-                  {['男', '女', '保密'].map((g) => (
+                  {GenderOptions.map((g) => (
                     <button
                       key={g}
                       onClick={() => setEditValue(g)}

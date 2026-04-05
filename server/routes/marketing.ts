@@ -109,6 +109,24 @@ router.post('/coupons/:id/claim', requireAuth, async (req: Request, res: Respons
       });
     }
 
+    // 原子更新已领取数量 (防止超发)
+    const { data: updateResult, error: updateError } = await supabaseAdmin
+      .from('coupons')
+      .update({ used_count: coupon.used_count + 1 })
+      .eq('id', id)
+      .lt('used_count', coupon.total_count) // 条件：未超发
+      .select('used_count');
+
+    if (updateError || !updateResult || updateResult.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'COUPON_SOLD_OUT',
+          message: '优惠券已领完'
+        }
+      });
+    }
+
     // 领取优惠券
     const { error: insertError } = await supabaseAdmin
       .from('user_coupons')
@@ -119,6 +137,12 @@ router.post('/coupons/:id/claim', requireAuth, async (req: Request, res: Respons
       });
 
     if (insertError) {
+      // 回滚已领取数量
+      await supabaseAdmin
+        .from('coupons')
+        .update({ used_count: coupon.used_count })
+        .eq('id', id);
+
       return res.status(500).json({
         success: false,
         error: {
@@ -127,12 +151,6 @@ router.post('/coupons/:id/claim', requireAuth, async (req: Request, res: Respons
         }
       });
     }
-
-    // 更新已领取数量
-    await supabaseAdmin
-      .from('coupons')
-      .update({ used_count: coupon.used_count + 1 })
-      .eq('id', id);
 
     res.json({
       success: true,

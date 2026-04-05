@@ -192,6 +192,9 @@ export const ordersApi = {
     return request(`/orders?${query.toString()}`);
   },
 
+  getStats: () =>
+    request('/orders/stats'),
+
   getDetail: (id: string) =>
     request(`/orders/${id}`),
 
@@ -712,6 +715,10 @@ export const adminApi = {
 
   updateSettings: (settings: Record<string, any>) =>
     request('/admin/settings', { method: 'PUT', body: settings }),
+
+  // 管理员列表
+  getAdmins: () =>
+    request('/admin/admins'),
 
   // 操作日志
   getOperationLogs: (params?: { page?: number; pageSize?: number; operator?: string; type?: string; date?: string }) => {

@@ -221,11 +221,34 @@ router.post('/:id/buy', requireAuth, async (req: Request, res: Response) => {
       .from('order_items')
       .insert(orderItems);
 
-    // 更新礼包销量
-    await supabaseAdmin
+    // 更新礼包销量（使用条件更新防止超卖）
+    const { data: updateResult, error: stockUpdateError } = await supabaseAdmin
       .from('partner_packages')
       .update({ sales: packageData.sales + 1, stock: packageData.stock - 1 })
-      .eq('id', id);
+      .eq('id', id)
+      .gte('stock', 1) // 只有库存 >= 1 时才更新
+      .select('stock');
+
+    // 如果库存更新失败（超卖），回滚订单
+    if (stockUpdateError || !updateResult || updateResult.length === 0) {
+      // 删除已创建的订单
+      await supabaseAdmin
+        .from('order_items')
+        .delete()
+        .eq('order_id', order.id);
+      await supabaseAdmin
+        .from('orders')
+        .delete()
+        .eq('id', order.id);
+
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'OUT_OF_STOCK',
+          message: '礼包已售罄，请稍后再试'
+        }
+      });
+    }
 
     res.json({
       success: true,
