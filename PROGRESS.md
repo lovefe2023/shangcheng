@@ -2621,4 +2621,126 @@ if (existingItems && existingItems.length > 1) {
 
 ---
 
+## 三十五、Vercel 全栈部署 (2026-04-05)
+
+### 📋 部署概述
+
+将项目部署到 Vercel 平台，实现前后端一体化部署。
+
+### 🔧 部署配置
+
+#### 1. Vercel 配置文件 ✅
+
+```json
+// vercel.json
+{
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "framework": "vite",
+  "functions": {
+    "api/**/*.ts": { "maxDuration": 30 }
+  },
+  "routes": [
+    { "src": "/api/(.*)", "dest": "/api/index.ts" },
+    { "handle": "filesystem" },
+    { "src": "/(.*)", "dest": "/index.html" }
+  ]
+}
+```
+
+#### 2. Serverless Function 入口 ✅
+
+创建 `api/index.ts` 作为 Vercel Serverless Function 入口，支持所有 API 路由。
+
+### 🌐 部署地址
+
+| 环境 | 地址 |
+|------|------|
+| 生产环境 | https://shangcheng-fawn.vercel.app |
+| GitHub 仓库 | https://github.com/lovefe2023/shangcheng |
+
+### 📦 环境变量配置
+
+| 变量名 | 说明 |
+|--------|------|
+| `VITE_SUPABASE_URL` | Supabase 项目 URL |
+| `VITE_SUPABASE_ANON_KEY` | Supabase 公开密钥 |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase 服务密钥 |
+| `JWT_SECRET` | JWT 签名密钥 |
+| `ADMIN_PHONES` | 管理员手机号列表 |
+
+### ✅ 已部署 API 列表
+
+#### 公开 API
+
+| API | 方法 | 功能 |
+|-----|------|------|
+| `/api/health` | GET | 健康检查 |
+| `/api/products` | GET | 商品列表 |
+| `/api/products/:id` | GET | 商品详情 |
+| `/api/categories` | GET | 分类列表 |
+| `/api/banners` | GET | 轮播图列表 |
+| `/api/coupons` | GET | 优惠券列表 |
+| `/api/flash-sales` | GET | 秒杀活动 |
+| `/api/group-buys` | GET | 团购活动 |
+
+#### 认证 API
+
+| API | 方法 | 功能 |
+|-----|------|------|
+| `/api/auth/login` | POST | 用户登录 |
+| `/api/auth/register` | POST | 用户注册 |
+| `/api/auth/me` | GET | 获取当前用户 |
+| `/api/auth/logout` | POST | 用户登出 |
+
+#### 用户 API (需登录)
+
+| API | 方法 | 功能 |
+|-----|------|------|
+| `/api/orders/cart` | GET/POST | 购物车 |
+| `/api/orders` | GET | 订单列表 |
+| `/api/addresses` | GET/POST | 地址管理 |
+
+#### 后台管理 API (需管理员)
+
+| API | 方法 | 功能 |
+|-----|------|------|
+| `/api/admin/dashboard` | GET | 仪表盘统计 |
+| `/api/admin/products` | GET/POST/PUT/DELETE | 商品管理 |
+| `/api/admin/orders` | GET | 订单管理 |
+| `/api/admin/users` | GET | 用户管理 |
+| `/api/admin/partners` | GET | 合伙人管理 |
+| `/api/admin/withdrawals` | GET | 提现管理 |
+| `/api/admin/banners` | GET/POST/PUT/DELETE | 轮播图管理 |
+| `/api/admin/categories` | GET | 分类管理 |
+| `/api/admin/marketing` | GET | 营销活动 |
+
+### 📊 部署状态
+
+| 功能模块 | 状态 |
+|----------|:----:|
+| 前端页面 | ✅ 正常 |
+| 后端 API | ✅ 正常 |
+| 用户登录 | ✅ 正常 |
+| 商品列表 | ✅ 正常 |
+| 购物车 | ✅ 正常 |
+| 后台管理 | ✅ 正常 |
+
+### 🔧 部署过程中修复的问题
+
+1. **Vercel runtime 配置错误** - 移除无效的 `runtime` 配置
+2. **API 路由 404** - 修复 `vercel.json` 路由配置
+3. **购物车路径不匹配** - 添加 `/orders/cart` 别名路由
+4. **后台管理 API 缺失** - 补充完整的后台管理 API
+
+### 📁 新增/修改文件
+
+| 文件 | 用途 |
+|------|------|
+| `api/index.ts` | Vercel Serverless Function 入口 |
+| `vercel.json` | Vercel 部署配置 |
+| `test_api.mjs` | API 测试脚本 |
+
+---
+
 **最后更新**: 2026-04-05
