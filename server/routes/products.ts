@@ -245,7 +245,7 @@ router.get('/search/suggest', async (req: Request, res: Response) => {
     const { data: products, error } = await supabaseAdmin
       .from('products')
       .select('id, name, price, images')
-      .in('status', ['上架', 'on_shelves'])
+      .eq('status', 'on_shelves')
       .ilike('name', `%${keyword}%`)
       .limit(10);
 

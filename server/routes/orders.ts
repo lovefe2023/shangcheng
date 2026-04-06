@@ -548,7 +548,9 @@ router.post('/', requireAuth, async (req: Request, res: Response) => {
       cart_item_ids,
       coupon_id,
       note,
-      referrer_id
+      referrer_id,
+      order_type = 'normal',
+      activity_id
     } = req.body;
 
     // 获取购物车项
@@ -574,6 +576,107 @@ router.post('/', requireAuth, async (req: Request, res: Response) => {
       });
     }
 
+    // 秒杀/团购活动信息
+    let flashSaleInfo: any = null;
+    let groupBuyInfo: any = null;
+    let activityPrice: number | null = null;
+    let activityProductId: string | null = null;
+
+    // 处理秒杀订单
+    if (order_type === 'flash_sale' && activity_id) {
+      const { data: flashSale, error: flashError } = await supabaseAdmin
+        .from('flash_sales')
+        .select('*')
+        .eq('id', activity_id)
+        .eq('status', 'ongoing')
+        .single();
+
+      if (flashError || !flashSale) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'FLASH_SALE_NOT_FOUND',
+            message: '秒杀活动不存在或已结束'
+          }
+        });
+      }
+
+      // 检查秒杀库存
+      if (flashSale.stock <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'FLASH_SALE_SOLD_OUT',
+            message: '秒杀商品已售罄'
+          }
+        });
+      }
+
+      // 检查用户限购
+      if (flashSale.limit_per_user) {
+        const { data: userFlashOrders } = await supabaseAdmin
+          .from('orders')
+          .select('id')
+          .eq('user_id', req.user!.id)
+          .eq('type', 'flash_sale')
+          .like('note', `%flash_sale_id:${activity_id}%`);
+
+        const boughtCount = userFlashOrders?.length || 0;
+        const cartQuantity = cartItems.reduce((sum: number, item: any) => {
+          if (item.product_id === flashSale.product_id) return sum + item.quantity;
+          return sum;
+        }, 0);
+
+        if (boughtCount + cartQuantity > flashSale.limit_per_user) {
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'FLASH_SALE_LIMIT_EXCEEDED',
+              message: `秒杀限购${flashSale.limit_per_user}件，您已购买${boughtCount}件`
+            }
+          });
+        }
+      }
+
+      flashSaleInfo = flashSale;
+      activityPrice = flashSale.flash_price;
+      activityProductId = flashSale.product_id;
+    }
+
+    // 处理团购订单
+    if (order_type === 'group_buy' && activity_id) {
+      const { data: groupBuy, error: groupError } = await supabaseAdmin
+        .from('group_buys')
+        .select('*')
+        .eq('id', activity_id)
+        .single();
+
+      if (groupError || !groupBuy) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'GROUP_BUY_NOT_FOUND',
+            message: '团购活动不存在'
+          }
+        });
+      }
+
+      // 检查团购状态
+      if (groupBuy.status !== 'pending') {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'GROUP_BUY_NOT_ACTIVE',
+            message: groupBuy.status === 'success' ? '团购已成功结束' : '团购已结束'
+          }
+        });
+      }
+
+      groupBuyInfo = groupBuy;
+      activityPrice = groupBuy.group_price;
+      activityProductId = groupBuy.product_id;
+    }
+
     // 验证商品库存
     for (const item of cartItems) {
       if (!item.product || item.product.status !== 'on_shelves') {
@@ -585,12 +688,56 @@ router.post('/', requireAuth, async (req: Request, res: Response) => {
           }
         });
       }
-      if (item.product.stock < item.quantity) {
+
+      // 秒杀订单验证：购物车中只能有秒杀商品
+      if (order_type === 'flash_sale' && activityProductId) {
+        if (item.product_id !== activityProductId) {
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'FLASH_SALE_PRODUCT_MISMATCH',
+              message: '秒杀订单只能包含秒杀商品'
+            }
+          });
+        }
+      }
+
+      // 团购订单验证：购物车中只能有团购商品
+      if (order_type === 'group_buy' && activityProductId) {
+        if (item.product_id !== activityProductId) {
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'GROUP_BUY_PRODUCT_MISMATCH',
+              message: '团购订单只能包含团购商品'
+            }
+          });
+        }
+      }
+
+      // 普通订单检查库存，秒杀/团购检查活动库存
+      if (order_type === 'normal') {
+        if (item.product.stock < item.quantity) {
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'STOCK_INSUFFICIENT',
+              message: `商品 ${item.product.name} 库存不足`
+            }
+          });
+        }
+      }
+    }
+
+    // 秒杀库存检查
+    if (order_type === 'flash_sale' && flashSaleInfo) {
+      const totalQuantity = cartItems.reduce((sum: number, item: any) => sum + item.quantity, 0);
+      if (flashSaleInfo.stock < totalQuantity) {
         return res.status(400).json({
           success: false,
           error: {
-            code: 'STOCK_INSUFFICIENT',
-            message: `商品 ${item.product.name} 库存不足`
+            code: 'FLASH_SALE_STOCK_INSUFFICIENT',
+            message: `秒杀库存不足，仅剩${flashSaleInfo.stock}件`
           }
         });
       }
@@ -614,10 +761,17 @@ router.post('/', requireAuth, async (req: Request, res: Response) => {
       });
     }
 
-    // 计算金额
+    // 计算金额（支持秒杀/团购价格）
     let totalAmount = 0;
     const orderItems = cartItems.map(item => {
-      const price = item.product.price;
+      // 根据订单类型决定价格
+      let price = item.product.price;
+      if (order_type === 'flash_sale' && activityPrice !== null && item.product_id === activityProductId) {
+        price = activityPrice;
+      } else if (order_type === 'group_buy' && activityPrice !== null && item.product_id === activityProductId) {
+        price = activityPrice;
+      }
+
       totalAmount += price * item.quantity;
       return {
         product_id: item.product_id,
@@ -697,12 +851,22 @@ router.post('/', requireAuth, async (req: Request, res: Response) => {
     // 生成订单号
     const orderNo = `ORD${Date.now()}${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
 
+    // 构建订单备注（包含活动ID用于后续查询）
+    let orderNote = note || '';
+    if (order_type === 'flash_sale' && activity_id) {
+      orderNote = `${orderNote} [flash_sale_id:${activity_id}]`.trim();
+    }
+    if (order_type === 'group_buy' && activity_id) {
+      orderNote = `${orderNote} [group_buy_id:${activity_id}]`.trim();
+    }
+
     // 创建订单
     const { data: order, error: orderError } = await supabaseAdmin
       .from('orders')
       .insert({
         order_no: orderNo,
         user_id: req.user!.id,
+        type: order_type,
         status: 'pending_payment',
         total_amount: totalAmount,
         paid_amount: paidAmount,
@@ -717,7 +881,7 @@ router.post('/', requireAuth, async (req: Request, res: Response) => {
           detail: address.detail
         },
         referrer_id,
-        note
+        note: orderNote
       })
       .select()
       .single();
@@ -756,31 +920,82 @@ router.post('/', requireAuth, async (req: Request, res: Response) => {
       });
     }
 
-    // 扣减库存 (使用条件更新实现原子操作，防止超卖)
-    for (const item of cartItems) {
-      // 使用条件更新：只有当 stock >= quantity 时才更新
-      const { data: updateResult, error: stockError } = await supabaseAdmin
-        .from('products')
+    // 扣减库存
+    if (order_type === 'flash_sale' && flashSaleInfo) {
+      // 扣减秒杀库存
+      const totalQuantity = cartItems.reduce((sum: number, item: any) => sum + item.quantity, 0);
+      const { error: flashStockError } = await supabaseAdmin
+        .from('flash_sales')
         .update({
-          stock: item.product.stock - item.quantity,
-          updated_at: new Date().toISOString()
+          stock: flashSaleInfo.stock - totalQuantity,
+          sold_count: flashSaleInfo.sold_count + totalQuantity
         })
-        .eq('id', item.product_id)
-        .gte('stock', item.quantity) // 条件：库存充足
-        .select('stock');
+        .eq('id', activity_id);
 
-      if (stockError || !updateResult || updateResult.length === 0) {
-        console.error('Stock update failed for product:', item.product_id, stockError);
-        // 回滚订单和订单商品
-        await supabaseAdmin.from('order_items').delete().eq('order_id', order.id);
-        await supabaseAdmin.from('orders').delete().eq('id', order.id);
-        return res.status(400).json({
-          success: false,
-          error: {
-            code: 'STOCK_INSUFFICIENT',
-            message: `商品 ${item.product.name} 库存不足`
-          }
-        });
+      if (flashStockError) {
+        console.error('Flash sale stock update error:', flashStockError);
+      }
+
+      // 同时扣减商品库存
+      for (const item of cartItems) {
+        await supabaseAdmin
+          .from('products')
+          .update({
+            stock: item.product.stock - item.quantity,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', item.product_id);
+      }
+    } else if (order_type === 'group_buy' && groupBuyInfo) {
+      // 团购：更新参团人数
+      const totalQuantity = cartItems.reduce((sum: number, item: any) => sum + item.quantity, 0);
+      const newCurrentQuantity = (groupBuyInfo.current_quantity || 0) + totalQuantity;
+
+      await supabaseAdmin
+        .from('group_buys')
+        .update({
+          current_quantity: newCurrentQuantity,
+          status: newCurrentQuantity >= groupBuyInfo.min_quantity ? 'success' : 'pending'
+        })
+        .eq('id', activity_id);
+
+      // 扣减商品库存
+      for (const item of cartItems) {
+        await supabaseAdmin
+          .from('products')
+          .update({
+            stock: item.product.stock - item.quantity,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', item.product_id);
+      }
+    } else {
+      // 普通订单：扣减商品库存 (使用条件更新实现原子操作，防止超卖)
+      for (const item of cartItems) {
+        // 使用条件更新：只有当 stock >= quantity 时才更新
+        const { data: updateResult, error: stockError } = await supabaseAdmin
+          .from('products')
+          .update({
+            stock: item.product.stock - item.quantity,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', item.product_id)
+          .gte('stock', item.quantity) // 条件：库存充足
+          .select('stock');
+
+        if (stockError || !updateResult || updateResult.length === 0) {
+          console.error('Stock update failed for product:', item.product_id, stockError);
+          // 回滚订单和订单商品
+          await supabaseAdmin.from('order_items').delete().eq('order_id', order.id);
+          await supabaseAdmin.from('orders').delete().eq('id', order.id);
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'STOCK_INSUFFICIENT',
+              message: `商品 ${item.product.name} 库存不足`
+            }
+          });
+        }
       }
     }
 
@@ -847,6 +1062,31 @@ router.put('/:id/cancel', requireAuth, async (req: Request, res: Response) => {
           message: '当前订单状态不能取消'
         }
       });
+    }
+
+    // 获取订单商品项以恢复库存
+    const { data: orderItems } = await supabaseAdmin
+      .from('order_items')
+      .select('product_id, quantity')
+      .eq('order_id', id);
+
+    // 恢复库存
+    if (orderItems && orderItems.length > 0) {
+      for (const item of orderItems) {
+        await supabaseAdmin
+          .from('products')
+          .update({
+            stock: supabaseAdmin.rpc('increment_stock', { amount: item.quantity }),
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', item.product_id);
+
+        // 直接执行 SQL 更新库存（更可靠的方式）
+        await supabaseAdmin.rpc('increment_product_stock', {
+          p_product_id: item.product_id,
+          p_quantity: item.quantity
+        });
+      }
     }
 
     const { error } = await supabaseAdmin
@@ -1046,6 +1286,134 @@ router.put('/:id/pay', requireAuth, async (req: Request, res: Response) => {
         code: 'SERVER_ERROR',
         message: '服务器错误'
       }
+    });
+  }
+});
+
+// ===========================================
+// 退款相关
+// ===========================================
+
+/**
+ * POST /api/orders/:id/refund
+ * 申请退款
+ */
+router.post('/:id/refund', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { reason } = req.body;
+
+    // 验证订单
+    const { data: order, error: fetchError } = await supabaseAdmin
+      .from('orders')
+      .select('*')
+      .eq('id', id)
+      .eq('user_id', req.user!.id)
+      .single();
+
+    if (fetchError || !order) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'ORDER_NOT_FOUND', message: '订单不存在' }
+      });
+    }
+
+    // 只有已支付或已发货的订单可以申请退款
+    if (!['pending_shipment', 'shipped'].includes(order.status)) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'CANNOT_REFUND', message: '当前订单状态无法申请退款' }
+      });
+    }
+
+    // 检查是否已有退款申请
+    const { data: existingRefund } = await supabaseAdmin
+      .from('refunds')
+      .select('id')
+      .eq('order_id', id)
+      .eq('status', 'pending')
+      .single();
+
+    if (existingRefund) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'REFUND_EXISTS', message: '该订单已有待处理的退款申请' }
+      });
+    }
+
+    // 创建退款记录
+    const { data: refund, error: refundError } = await supabaseAdmin
+      .from('refunds')
+      .insert({
+        order_id: id,
+        user_id: req.user!.id,
+        amount: order.paid_amount,
+        reason: reason || '用户申请退款',
+        status: 'pending'
+      })
+      .select()
+      .single();
+
+    if (refundError) {
+      console.error('Create refund error:', refundError);
+      return res.status(500).json({
+        success: false,
+        error: { code: 'REFUND_CREATE_FAILED', message: '创建退款申请失败' }
+      });
+    }
+
+    // 更新订单状态为退款中
+    await supabaseAdmin
+      .from('orders')
+      .update({ status: 'refunding' })
+      .eq('id', id);
+
+    res.json({
+      success: true,
+      data: refund,
+      message: '退款申请已提交，请等待审核'
+    });
+  } catch (error) {
+    console.error('Request refund error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * GET /api/orders/:id/refund
+ * 获取订单退款信息
+ */
+router.get('/:id/refund', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const { data: refund, error } = await supabaseAdmin
+      .from('refunds')
+      .select('*')
+      .eq('order_id', id)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (error || !refund) {
+      return res.json({
+        success: true,
+        data: null
+      });
+    }
+
+    res.json({
+      success: true,
+      data: refund
+    });
+  } catch (error) {
+    console.error('Get refund error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
     });
   }
 });

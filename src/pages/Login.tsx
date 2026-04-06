@@ -155,7 +155,7 @@ export default function Login() {
             {loading ? '登录中...' : '立即登录'}
           </button>
           <div className="flex justify-between items-center px-1">
-            <Link to="#" className="text-slate-500 dark:text-slate-400 text-sm hover:text-primary transition-colors">忘记密码？</Link>
+            <Link to="/forgot-password" className="text-slate-500 dark:text-slate-400 text-sm hover:text-primary transition-colors">忘记密码？</Link>
             <div className="flex gap-1 text-sm">
               <span className="text-slate-500 dark:text-slate-400">新用户？</span>
               <Link to="/register" className="text-primary font-bold hover:underline">立即注册</Link>

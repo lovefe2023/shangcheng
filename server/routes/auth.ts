@@ -487,4 +487,155 @@ router.put('/password', requireAuth, async (req: Request, res: Response) => {
   }
 });
 
+// ===========================================
+// 忘记密码相关
+// ===========================================
+
+// 验证码存储（生产环境应使用Redis）
+const verificationCodes = new Map<string, { code: string; expiresAt: number }>();
+
+/**
+ * POST /api/auth/forgot-password
+ * 发送验证码（忘记密码）
+ */
+router.post('/forgot-password', async (req: Request, res: Response) => {
+  try {
+    const { phone } = req.body;
+
+    if (!phone) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'INVALID_PARAMS', message: '手机号不能为空' }
+      });
+    }
+
+    // 验证手机号格式
+    if (!/^1[3-9]\d{9}$/.test(phone)) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'INVALID_PHONE', message: '请输入正确的手机号' }
+      });
+    }
+
+    // 检查用户是否存在
+    const { data: user } = await supabaseAdmin
+      .from('users')
+      .select('id')
+      .eq('phone', phone)
+      .single();
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'USER_NOT_FOUND', message: '该手机号未注册' }
+      });
+    }
+
+    // 生成6位验证码
+    const code = Math.random().toString().slice(-6);
+
+    // 存储验证码（5分钟有效）
+    verificationCodes.set(phone, {
+      code,
+      expiresAt: Date.now() + 5 * 60 * 1000
+    });
+
+    // 生产环境：调用短信服务发送验证码
+    // await sendSms(phone, `您的验证码是：${code}，5分钟内有效`);
+
+    // 开发环境：返回验证码（生产环境应删除此行）
+    console.log(`[DEV] 验证码已发送到 ${phone}: ${code}`);
+
+    res.json({
+      success: true,
+      message: '验证码已发送',
+      // 开发环境返回验证码，生产环境应删除
+      _dev_code: process.env.NODE_ENV === 'development' ? code : undefined
+    });
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * POST /api/auth/reset-password
+ * 重置密码（使用验证码）
+ */
+router.post('/reset-password', async (req: Request, res: Response) => {
+  try {
+    const { phone, code, newPassword } = req.body;
+
+    if (!phone || !code || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'INVALID_PARAMS', message: '参数不完整' }
+      });
+    }
+
+    // 验证密码长度
+    if (newPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'INVALID_PASSWORD', message: '密码至少需要6位字符' }
+      });
+    }
+
+    // 验证验证码
+    const storedCode = verificationCodes.get(phone);
+    if (!storedCode) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'CODE_NOT_FOUND', message: '请先获取验证码' }
+      });
+    }
+
+    if (storedCode.expiresAt < Date.now()) {
+      verificationCodes.delete(phone);
+      return res.status(400).json({
+        success: false,
+        error: { code: 'CODE_EXPIRED', message: '验证码已过期，请重新获取' }
+      });
+    }
+
+    if (storedCode.code !== code) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'CODE_INVALID', message: '验证码错误' }
+      });
+    }
+
+    // 更新密码
+    const hashedPassword = await hashPassword(newPassword);
+    const { error: updateError } = await supabaseAdmin
+      .from('users')
+      .update({ password_hash: hashedPassword })
+      .eq('phone', phone);
+
+    if (updateError) {
+      return res.status(500).json({
+        success: false,
+        error: { code: 'UPDATE_FAILED', message: '密码重置失败' }
+      });
+    }
+
+    // 删除已使用的验证码
+    verificationCodes.delete(phone);
+
+    res.json({
+      success: true,
+      message: '密码重置成功，请使用新密码登录'
+    });
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
 export default router;

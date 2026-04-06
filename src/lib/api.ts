@@ -121,7 +121,15 @@ export const authApi = {
     request('/auth/profile', { method: 'PUT', body: data }),
 
   updatePassword: (data: { oldPassword: string; newPassword: string }) =>
-    request('/auth/password', { method: 'PUT', body: data })
+    request('/auth/password', { method: 'PUT', body: data }),
+
+  // 忘记密码：发送验证码
+  forgotPassword: (phone: string) =>
+    request('/auth/forgot-password', { method: 'POST', body: { phone } }),
+
+  // 重置密码
+  resetPassword: (data: { phone: string; code: string; newPassword: string }) =>
+    request('/auth/reset-password', { method: 'POST', body: data })
 };
 
 // ===========================================
@@ -207,6 +215,8 @@ export const ordersApi = {
     coupon_id?: string;
     note?: string;
     referrer_id?: string;
+    order_type?: 'normal' | 'flash_sale' | 'group_buy';
+    activity_id?: string;
   }) =>
     request('/orders', { method: 'POST', body: data }),
 
@@ -217,7 +227,11 @@ export const ordersApi = {
     request(`/orders/${id}/confirm`, { method: 'PUT' }),
 
   pay: (id: string) =>
-    request(`/orders/${id}/pay`, { method: 'PUT' })
+    request(`/orders/${id}/pay`, { method: 'PUT' }),
+
+  // 申请退款
+  requestRefund: (id: string, data: { reason: string }) =>
+    request(`/orders/${id}/refund`, { method: 'POST', body: data })
 };
 
 // ===========================================
@@ -884,7 +898,32 @@ export const adminApi = {
       });
     }
     return request(`/admin/group-buys/${id}/records?${query.toString()}`);
-  }
+  },
+
+  // ===========================================
+  // 退款管理
+  // ===========================================
+
+  getRefunds: (params?: { page?: number; pageSize?: number; status?: string }) => {
+    const query = new URLSearchParams();
+    if (params) {
+      Object.entries(params).forEach(([key, value]) => {
+        if (value !== undefined) {
+          query.append(key, String(value));
+        }
+      });
+    }
+    return request(`/admin/refunds?${query.toString()}`);
+  },
+
+  getRefund: (id: string) =>
+    request(`/admin/refunds/${id}`),
+
+  approveRefund: (id: string, admin_note?: string) =>
+    request(`/admin/refunds/${id}/approve`, { method: 'PUT', body: { admin_note } }),
+
+  rejectRefund: (id: string, admin_note: string) =>
+    request(`/admin/refunds/${id}/reject`, { method: 'PUT', body: { admin_note } })
 };
 
 // 导出默认请求函数

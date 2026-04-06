@@ -940,6 +940,22 @@ router.put('/orders/:id/cancel', async (req: Request, res: Response) => {
       });
     }
 
+    // 获取订单商品项以恢复库存
+    const { data: orderItems } = await supabaseAdmin
+      .from('order_items')
+      .select('product_id, quantity')
+      .eq('order_id', id);
+
+    // 恢复库存
+    if (orderItems && orderItems.length > 0) {
+      for (const item of orderItems) {
+        await supabaseAdmin.rpc('increment_product_stock', {
+          p_product_id: item.product_id,
+          p_quantity: item.quantity
+        });
+      }
+    }
+
     const { error } = await supabaseAdmin
       .from('orders')
       .update({ status: 'cancelled' })
@@ -6191,6 +6207,296 @@ router.put('/recruit-settings', async (req: Request, res: Response) => {
     res.json({ success: true, message: '配置已保存' });
   } catch (error) {
     console.error('Update recruit settings error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+// ===========================================
+// 退款管理
+// ===========================================
+
+/**
+ * GET /api/admin/refunds
+ * 退款申请列表
+ */
+router.get('/refunds', async (req: Request, res: Response) => {
+  try {
+    const { page = 1, pageSize = 20, status } = req.query;
+
+    let query = supabaseAdmin
+      .from('refunds')
+      .select('*', { count: 'exact' });
+
+    if (status) {
+      query = query.eq('status', status);
+    }
+
+    query = query.order('created_at', { ascending: false });
+
+    // 分页
+    const pageNum = Math.max(1, parseInt(page as string) || 1);
+    const pageSizeNum = Math.min(100, Math.max(1, parseInt(pageSize as string) || 20));
+    const offset = (pageNum - 1) * pageSizeNum;
+
+    query = query.range(offset, offset + pageSizeNum - 1);
+
+    const { data: refunds, error, count } = await query;
+
+    if (error) {
+      console.error('Get refunds error:', error);
+      return res.status(500).json({
+        success: false,
+        error: { code: 'QUERY_ERROR', message: '查询失败' }
+      });
+    }
+
+    // 获取关联的用户和订单信息
+    const userIds = [...new Set((refunds || []).map((r: any) => r.user_id))];
+    const orderIds = [...new Set((refunds || []).map((r: any) => r.order_id))];
+
+    const [usersRes, ordersRes] = await Promise.all([
+      supabaseAdmin.from('users').select('id, name, phone').in('id', userIds),
+      supabaseAdmin.from('orders').select('id, order_no').in('id', orderIds)
+    ]);
+
+    const usersMap = new Map((usersRes.data || []).map((u: any) => [u.id, u]));
+    const ordersMap = new Map((ordersRes.data || []).map((o: any) => [o.id, o]));
+
+    const refundsWithDetails = (refunds || []).map((refund: any) => ({
+      ...refund,
+      user: usersMap.get(refund.user_id) || null,
+      order: ordersMap.get(refund.order_id) || null
+    }));
+
+    res.json({
+      success: true,
+      data: {
+        list: refundsWithDetails,
+        total: count || 0,
+        page: pageNum,
+        pageSize: pageSizeNum
+      }
+    });
+  } catch (error) {
+    console.error('Get refunds error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * GET /api/admin/refunds/:id
+ * 退款详情
+ */
+router.get('/refunds/:id', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+
+    const { data: refund, error } = await supabaseAdmin
+      .from('refunds')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (error || !refund) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'REFUND_NOT_FOUND', message: '退款申请不存在' }
+      });
+    }
+
+    // 获取关联信息
+    const [userRes, orderRes] = await Promise.all([
+      supabaseAdmin.from('users').select('id, name, phone').eq('id', refund.user_id).single(),
+      supabaseAdmin.from('orders')
+        .select('id, order_no, total_amount, paid_amount, status, created_at, items:order_items(*)')
+        .eq('id', refund.order_id)
+        .single()
+    ]);
+
+    res.json({
+      success: true,
+      data: {
+        ...refund,
+        user: userRes.data,
+        order: orderRes.data
+      }
+    });
+  } catch (error) {
+    console.error('Get refund detail error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * PUT /api/admin/refunds/:id/approve
+ * 批准退款
+ */
+router.put('/refunds/:id/approve', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { admin_note } = req.body;
+
+    const { data: refund, error: fetchError } = await supabaseAdmin
+      .from('refunds')
+      .select('*, orders!refunds_order_id_fkey(*)')
+      .eq('id', id)
+      .single();
+
+    if (fetchError || !refund) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'REFUND_NOT_FOUND', message: '退款申请不存在' }
+      });
+    }
+
+    if (refund.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'REFUND_ALREADY_PROCESSED', message: '该退款申请已处理' }
+      });
+    }
+
+    // 更新退款状态
+    const { error: updateError } = await supabaseAdmin
+      .from('refunds')
+      .update({
+        status: 'completed',
+        admin_note,
+        processed_at: new Date().toISOString()
+      })
+      .eq('id', id);
+
+    if (updateError) {
+      return res.status(500).json({
+        success: false,
+        error: { code: 'UPDATE_ERROR', message: '更新退款状态失败' }
+      });
+    }
+
+    // 更新订单状态
+    await supabaseAdmin
+      .from('orders')
+      .update({ status: 'cancelled' })
+      .eq('id', refund.order_id);
+
+    // 恢复库存
+    const { data: orderItems } = await supabaseAdmin
+      .from('order_items')
+      .select('product_id, quantity')
+      .eq('order_id', refund.order_id);
+
+    if (orderItems && orderItems.length > 0) {
+      for (const item of orderItems) {
+        await supabaseAdmin.rpc('increment_product_stock', {
+          p_product_id: item.product_id,
+          p_quantity: item.quantity
+        });
+      }
+    }
+
+    // 记录操作日志
+    await supabaseAdmin.from('operation_logs').insert({
+      operator_id: (req as any).user?.id || 'unknown',
+      type: 'refund_approve',
+      target_type: 'refund',
+      target_id: id,
+      detail: `批准退款：${refund.amount}元`,
+      created_at: new Date().toISOString()
+    });
+
+    res.json({
+      success: true,
+      message: '退款已批准'
+    });
+  } catch (error) {
+    console.error('Approve refund error:', error);
+    res.status(500).json({
+      success: false,
+      error: { code: 'SERVER_ERROR', message: '服务器错误' }
+    });
+  }
+});
+
+/**
+ * PUT /api/admin/refunds/:id/reject
+ * 拒绝退款
+ */
+router.put('/refunds/:id/reject', async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { admin_note } = req.body;
+
+    if (!admin_note) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'REASON_REQUIRED', message: '请填写拒绝原因' }
+      });
+    }
+
+    const { data: refund, error: fetchError } = await supabaseAdmin
+      .from('refunds')
+      .select('*, orders!refunds_order_id_fkey(status)')
+      .eq('id', id)
+      .single();
+
+    if (fetchError || !refund) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'REFUND_NOT_FOUND', message: '退款申请不存在' }
+      });
+    }
+
+    if (refund.status !== 'pending') {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'REFUND_ALREADY_PROCESSED', message: '该退款申请已处理' }
+      });
+    }
+
+    // 更新退款状态
+    await supabaseAdmin
+      .from('refunds')
+      .update({
+        status: 'rejected',
+        admin_note,
+        processed_at: new Date().toISOString()
+      })
+      .eq('id', id);
+
+    // 恢复订单状态（从退款中恢复到之前的状态）
+    const order = refund.orders as any;
+    const previousStatus = order?.status === 'refunding' ? 'pending_shipment' : order?.status;
+
+    await supabaseAdmin
+      .from('orders')
+      .update({ status: previousStatus || 'pending_shipment' })
+      .eq('id', refund.order_id);
+
+    // 记录操作日志
+    await supabaseAdmin.from('operation_logs').insert({
+      operator_id: (req as any).user?.id || 'unknown',
+      type: 'refund_reject',
+      target_type: 'refund',
+      target_id: id,
+      detail: `拒绝退款：${admin_note}`,
+      created_at: new Date().toISOString()
+    });
+
+    res.json({
+      success: true,
+      message: '退款已拒绝'
+    });
+  } catch (error) {
+    console.error('Reject refund error:', error);
     res.status(500).json({
       success: false,
       error: { code: 'SERVER_ERROR', message: '服务器错误' }

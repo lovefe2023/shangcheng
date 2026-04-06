@@ -30,6 +30,7 @@ import Payment from './pages/Payment';
 import Addresses from './pages/Addresses';
 import Login from './pages/Login';
 import Register from './pages/Register';
+import ForgotPassword from './pages/ForgotPassword';
 import SalesDetails from './pages/SalesDetails';
 import Withdraw from './pages/Withdraw';
 import TeamSales from './pages/TeamSales';
@@ -155,6 +156,7 @@ export default function App() {
           <Route path="addresses" element={<Addresses />} />
           <Route path="login" element={<Login />} />
           <Route path="register" element={<Register />} />
+          <Route path="forgot-password" element={<ForgotPassword />} />
           <Route path="member/:id" element={<MemberDetails />} />
           <Route path="sales" element={<Sales />} />
           <Route path="sales/details" element={<SalesDetails />} />
