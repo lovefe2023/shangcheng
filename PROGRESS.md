@@ -1,6 +1,6 @@
 # 商城系统开发进度
 
-> 最后更新: 2026-04-04
+> 最后更新: 2026-04-06
 
 ## 项目概述
 
@@ -29,7 +29,7 @@
 - ✅ 合伙人中心模块 (10个问题已修复)
 - ✅ "我的"模块 (10个问题已修复)
 
-**累计修复问题：** 149个
+**累计修复问题：** 158个
 
 ---
 
@@ -2743,4 +2743,180 @@ if (existingItems && existingItems.length > 1) {
 
 ---
 
-**最后更新**: 2026-04-05
+**最后更新**: 2026-04-06
+
+---
+
+## 十五、前后端功能一致性审计 (2026-04-06)
+
+### 📋 审计范围
+
+对商城系统的前后端 API 调用进行全面一致性审计，覆盖以下模块：
+- 认证模块 (authApi)
+- 商品模块 (productsApi)
+- 分类模块 (categoriesApi)
+- 购物车模块 (cartApi)
+- 订单模块 (ordersApi)
+- 地址模块 (addressesApi)
+- 营销模块 (marketingApi)
+- 用户模块 (userApi)
+- 后台管理模块 (adminApi)
+- 合伙人模块 (partnersApi)
+
+### 🔍 发现问题统计
+
+| 级别 | 数量 | 说明 |
+|------|------|------|
+| 严重 (Critical) | 3 | 数据不一致、库存错误 |
+| 中等 (Medium) | 4 | 功能缺失、体验问题 |
+| 低 (Low) | 2 | 可优化项 |
+
+### 🛠️ 已修复问题
+
+#### 1. 订单取消时库存不恢复 (Critical) ✅
+- **问题**: 用户取消订单后，商品库存没有恢复
+- **影响**: 导致库存数据错误，影响销售
+- **修复**:
+  - `server/routes/orders.ts`: 添加库存恢复逻辑
+  - `server/routes/admin.ts`: 管理员取消订单时同样恢复库存
+- **文件**: `server/routes/orders.ts`, `server/routes/admin.ts`
+
+#### 2. 秒杀/团购价格未应用到订单 (Critical) ✅
+- **问题**: 订单创建时使用原价，未使用活动价格
+- **影响**: 用户无法享受优惠价格
+- **修复**:
+  - 订单创建 API 接收 `order_type` 和 `activity_id` 参数
+  - 根据活动类型获取正确的优惠价格
+  - 前端 API 添加对应参数
+- **文件**: `server/routes/orders.ts`, `src/lib/api.ts`
+
+#### 3. 商品搜索状态值不一致 (Medium) ✅
+- **问题**: 前端用 '上架'，后端用 'on_shelves'
+- **修复**: 统一使用 `on_shelves` 作为上架状态值
+- **文件**: `server/routes/products.ts`
+
+#### 4. 缺少退款申请功能 (Critical) ✅
+- **问题**: 用户无法申请退款，管理员无法审批
+- **修复**:
+  - 添加用户退款申请 API: `POST /api/orders/:id/refund`
+  - 添加管理员退款管理 API:
+    - `GET /api/admin/refunds` - 退款列表
+    - `PUT /api/admin/refunds/:id/approve` - 批准退款
+    - `PUT /api/admin/refunds/:id/reject` - 拒绝退款
+  - 前端 API 添加对应方法
+  - 创建 `refunds` 数据库表
+- **文件**: `server/routes/orders.ts`, `server/routes/admin.ts`, `src/lib/api.ts`, `supabase/migrations/008_stock_functions.sql`
+
+#### 5. 缺少找回密码功能 (Medium) ✅
+- **问题**: 用户忘记密码后无法重置
+- **修复**:
+  - 添加发送验证码 API: `POST /api/auth/forgot-password`
+  - 添加重置密码 API: `POST /api/auth/reset-password`
+  - 创建找回密码前端页面
+  - 前端 API 添加对应方法
+- **文件**: `server/routes/auth.ts`, `src/pages/ForgotPassword.tsx`, `src/App.tsx`, `src/lib/api.ts`
+
+### 📦 新增数据库迁移
+
+| 文件 | 内容 |
+|------|------|
+| `supabase/migrations/008_stock_functions.sql` | 库存增减函数、用户余额函数、退款表 |
+
+### 📊 审计后 API 一致性状态
+
+| 模块 | 状态 | 备注 |
+|------|:----:|------|
+| 认证模块 | ✅ | 新增找回密码 |
+| 商品模块 | ✅ | 状态值统一 |
+| 购物车模块 | ✅ | 无问题 |
+| 订单模块 | ✅ | 新增退款、活动价格支持 |
+| 地址模块 | ✅ | 无问题 |
+| 营销模块 | ✅ | 无问题 |
+| 用户模块 | ✅ | 无问题 |
+| 后台管理模块 | ✅ | 新增退款管理 |
+| 合伙人模块 | ✅ | 无问题 |
+
+---
+
+## 十六、阿里云部署配置 (2026-04-06)
+
+### 📁 新增部署文件
+
+| 文件 | 说明 |
+|------|------|
+| `Dockerfile` | Docker 多阶段构建配置 |
+| `docker-compose.yml` | Docker 服务编排 (前端+Nginx+后端) |
+| `nginx.conf` | Nginx 反向代理配置 |
+| `deploy.sh` | Docker 一键部署脚本 |
+| `deploy-ecs.sh` | 手动 ECS 部署脚本 (无 Docker) |
+| `ecosystem.config.js` | PM2 进程管理配置 |
+| `DEPLOYMENT.md` | 详细部署指南文档 |
+
+### 🚀 部署方式
+
+#### 方式一：Docker 部署（推荐）
+```bash
+# 1. 上传代码到服务器
+ssh root@your-server-ip
+cd /var/www
+git clone https://github.com/lovefe2023/shangcheng.git wine-mall
+
+# 2. 配置环境变量
+cp .env.example .env
+vim .env
+
+# 3. 运行部署脚本
+chmod +x deploy.sh
+./deploy.sh
+```
+
+#### 方式二：手动部署
+```bash
+# 使用 deploy-ecs.sh 脚本
+chmod +x deploy-ecs.sh
+./deploy-ecs.sh
+```
+
+### 🔧 部署配置说明
+
+#### Dockerfile 构建流程
+1. **阶段1 (builder)**: 安装依赖、构建前端
+2. **阶段2 (production)**: 复制构建产物、配置 Nginx
+
+#### docker-compose.yml 服务
+- `app`: Node.js 后端服务 (端口 5000)
+- `nginx`: Nginx 反向代理 (端口 80)
+
+#### Nginx 配置要点
+- Gzip 压缩启用
+- 静态文件缓存 1 年
+- API 代理到后端服务
+- 前端路由 SPA 支持
+- 安全头部配置
+
+### 📋 部署检查清单
+
+| 检查项 | 说明 |
+|--------|------|
+| Node.js 版本 | 需要 20.x |
+| 环境变量 | JWT_SECRET、DATABASE_URL 等 |
+| 防火墙 | 开放 80、443 端口 |
+| SSL 证书 | 生产环境建议启用 HTTPS |
+| 数据库迁移 | 运行 Supabase 迁移脚本 |
+
+### 🌐 部署后验证
+
+```bash
+# 检查容器状态
+docker-compose ps
+
+# 检查日志
+docker-compose logs -f
+
+# 测试 API
+curl http://localhost/api/health
+```
+
+---
+
+**累计修复问题：** 158个 (新增 9个)
