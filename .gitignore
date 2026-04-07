@@ -1,17 +1,40 @@
+# Dependencies - Vercel auto installs
 node_modules/
-build/
+
+# Build output - Vercel auto builds
 dist/
+build/
 coverage/
+
+# Local only files
 .DS_Store
 *.log
-.env*
-!.env.example
+.env
+.claude/
+memory/
 
-# Test files and screenshots
+# Express server - not used on Vercel (api/index.ts replaces it)
+server/
+
+# Test files
 test_*.png
 test_*.py
+test_*.mjs
+test_*.sh
 test_screenshots/
-scripts/test_*.py
+scripts/
 
-# Uploads directory (user uploaded files)
-server/uploads/
+# Docker deploy - not used on Vercel
+Dockerfile
+docker-compose.yml
+deploy.sh
+deploy-ecs.sh
+nginx.conf
+ecosystem.config.js
+
+# Documentation - not needed for build
+*.md
+!README.md
+
+# Uploads - local storage, not for Vercel
+uploads/
