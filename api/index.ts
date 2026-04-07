@@ -15,7 +15,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).end();
   }
 
-  const path = req.url?.replace('/api', '') || '/';
+  const path = (req.url?.replace('/api', '') || '/').split('?')[0];
 
   try {
     // 初始化 Supabase
