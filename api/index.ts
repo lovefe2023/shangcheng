@@ -510,82 +510,408 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const adminCheck = await checkAdmin(req, res, supabase);
       if (!adminCheck) return; // 已返回错误响应
 
-      // 仪表盘
+      // ===== 仪表盘 =====
       if (path === '/admin/dashboard') {
-        const [usersCount, productsCount, ordersCount] = await Promise.all([
+        const [usersCount, productsCount, ordersCount, ordersData] = await Promise.all([
           supabase.from('users').select('id', { count: 'exact', head: true }),
           supabase.from('products').select('id', { count: 'exact', head: true }),
-          supabase.from('orders').select('id', { count: 'exact', head: true })
+          supabase.from('orders').select('id', { count: 'exact', head: true }),
+          supabase.from('orders').select('paid_amount').in('status', ['completed', 'shipped', 'pending_shipment'])
         ]);
-
-        return res.json({
-          success: true,
-          data: {
-            usersCount: usersCount.count || 0,
-            productsCount: productsCount.count || 0,
-            ordersCount: ordersCount.count || 0,
-            totalRevenue: 0
-          }
-        });
+        const totalRevenue = ordersData.data?.reduce((sum: number, o: any) => sum + (o.paid_amount || 0), 0) || 0;
+        return res.json({ success: true, data: { usersCount: usersCount.count || 0, productsCount: productsCount.count || 0, ordersCount: ordersCount.count || 0, totalRevenue } });
       }
 
-      // 商品管理
+      // ===== 商品管理 =====
       if (path === '/admin/products' && method === 'GET') {
         const page = parseInt(url.searchParams.get('page') || '1');
         const pageSize = parseInt(url.searchParams.get('pageSize') || '20');
         const keyword = url.searchParams.get('keyword');
+        const status = url.searchParams.get('status');
 
         let query = supabase.from('products').select('*, category:categories(id, name)', { count: 'exact' });
         if (keyword) query = query.ilike('name', `%${keyword}%`);
+        if (status) query = query.eq('status', status);
         query = query.order('created_at', { ascending: false }).range((page - 1) * pageSize, page * pageSize - 1);
 
         const { data, error, count } = await query;
         if (error) return res.status(500).json({ success: false, error: error.message });
         return res.json({ success: true, data: { list: data, total: count, page, pageSize } });
       }
+      if (path === '/admin/products' && method === 'POST') {
+        const { data, error } = await supabase.from('products').insert({ ...req.body, status: req.body.status || 'on_shelves' }).select().single();
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true, data });
+      }
+      const productDetailMatch = path.match(/^\/admin\/products\/([a-f0-9-]+)$/);
+      if (productDetailMatch && method === 'GET') {
+        const { data, error } = await supabase.from('products').select('*, category:categories(id, name)').eq('id', productDetailMatch[1]).single();
+        if (error) return res.status(404).json({ success: false, error: '商品不存在' });
+        return res.json({ success: true, data });
+      }
+      if (productDetailMatch && method === 'PUT') {
+        const { data, error } = await supabase.from('products').update(req.body).eq('id', productDetailMatch[1]).select().single();
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true, data });
+      }
+      if (productDetailMatch && method === 'DELETE') {
+        const { error } = await supabase.from('products').delete().eq('id', productDetailMatch[1]);
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true });
+      }
 
-      // 订单管理
+      // ===== 订单管理 =====
       if (path === '/admin/orders' && method === 'GET') {
         const page = parseInt(url.searchParams.get('page') || '1');
         const pageSize = parseInt(url.searchParams.get('pageSize') || '20');
+        const status = url.searchParams.get('status');
 
-        const { data, error, count } = await supabase
-          .from('orders')
-          .select('*, user:users(id, name, phone)', { count: 'exact' })
-          .order('created_at', { ascending: false })
-          .range((page - 1) * pageSize, page * pageSize - 1);
+        let query = supabase.from('orders').select('*, user:users(id, name, phone)', { count: 'exact' });
+        if (status) query = query.eq('status', status);
+        query = query.order('created_at', { ascending: false }).range((page - 1) * pageSize, page * pageSize - 1);
 
+        const { data, error, count } = await query;
         if (error) return res.status(500).json({ success: false, error: error.message });
         return res.json({ success: true, data: { list: data, total: count, page, pageSize } });
       }
+      const orderDetailMatch = path.match(/^\/admin\/orders\/([a-f0-9-]+)$/);
+      if (orderDetailMatch && method === 'GET') {
+        const { data, error } = await supabase.from('orders').select('*, items:order_items(*), user:users(id, name, phone)').eq('id', orderDetailMatch[1]).single();
+        if (error) return res.status(404).json({ success: false, error: '订单不存在' });
+        return res.json({ success: true, data });
+      }
+      const orderShipMatch = path.match(/^\/admin\/orders\/([a-f0-9-]+)\/ship$/);
+      if (orderShipMatch && method === 'PUT') {
+        const { logistics_company, logistics_no } = req.body;
+        const { error } = await supabase.from('orders').update({ status: 'shipped', logistics_company, logistics_no, shipped_at: new Date().toISOString() }).eq('id', orderShipMatch[1]);
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true, message: '发货成功' });
+      }
+      const orderCancelMatch = path.match(/^\/admin\/orders\/([a-f0-9-]+)\/cancel$/);
+      if (orderCancelMatch && method === 'PUT') {
+        const { error } = await supabase.from('orders').update({ status: 'cancelled' }).eq('id', orderCancelMatch[1]);
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true, message: '订单已取消' });
+      }
 
-      // 用户管理
+      // ===== 用户管理 =====
       if (path === '/admin/users' && method === 'GET') {
         const page = parseInt(url.searchParams.get('page') || '1');
         const pageSize = parseInt(url.searchParams.get('pageSize') || '20');
+        const keyword = url.searchParams.get('keyword');
 
-        const { data, error, count } = await supabase
-          .from('users')
-          .select('id, phone, name, avatar, status, is_partner, partner_level, balance, created_at', { count: 'exact' })
-          .order('created_at', { ascending: false })
-          .range((page - 1) * pageSize, page * pageSize - 1);
+        let query = supabase.from('users').select('id, phone, name, avatar, status, is_partner, partner_level, balance, total_income, created_at', { count: 'exact' });
+        if (keyword) query = query.or(`name.ilike.%${keyword}%,phone.ilike.%${keyword}%`);
+        query = query.order('created_at', { ascending: false }).range((page - 1) * pageSize, page * pageSize - 1);
 
+        const { data, error, count } = await query;
         if (error) return res.status(500).json({ success: false, error: error.message });
         return res.json({ success: true, data: { list: data, total: count, page, pageSize } });
       }
+      const userDetailMatch = path.match(/^\/admin\/users\/([a-f0-9-]+)$/);
+      if (userDetailMatch && method === 'GET') {
+        const { data, error } = await supabase.from('users').select('id, phone, name, avatar, status, is_partner, partner_level, balance, total_income, invite_code, created_at, gender, birthday, email').eq('id', userDetailMatch[1]).single();
+        if (error) return res.status(404).json({ success: false, error: '用户不存在' });
+        return res.json({ success: true, data });
+      }
+      const userStatusMatch = path.match(/^\/admin\/users\/([a-f0-9-]+)\/status$/);
+      if (userStatusMatch && method === 'PUT') {
+        const { status } = req.body;
+        const { error } = await supabase.from('users').update({ status }).eq('id', userStatusMatch[1]);
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true });
+      }
+      const userOrdersMatch = path.match(/^\/admin\/users\/([a-f0-9-]+)\/orders$/);
+      if (userOrdersMatch && method === 'GET') {
+        const { data, error } = await supabase.from('orders').select('*').eq('user_id', userOrdersMatch[1]).order('created_at', { ascending: false });
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true, data: { list: data } });
+      }
+      const userIncomeMatch = path.match(/^\/admin\/users\/([a-f0-9-]+)\/income$/);
+      if (userIncomeMatch && method === 'GET') {
+        const { data, error } = await supabase.from('income_records').select('*').eq('user_id', userIncomeMatch[1]).order('created_at', { ascending: false });
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true, data: { list: data } });
+      }
+      const userAddressesMatch = path.match(/^\/admin\/users\/([a-f0-9-]+)\/addresses$/);
+      if (userAddressesMatch && method === 'GET') {
+        const { data, error } = await supabase.from('addresses').select('*').eq('user_id', userAddressesMatch[1]);
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true, data });
+      }
+      const userCellarMatch = path.match(/^\/admin\/users\/([a-f0-9-]+)\/cellar$/);
+      if (userCellarMatch && method === 'GET') {
+        const { data, error } = await supabase.from('cellar_items').select('*').eq('user_id', userCellarMatch[1]);
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true, data });
+      }
+      const userTeamMatch = path.match(/^\/admin\/users\/([a-f0-9-]+)\/team$/);
+      if (userTeamMatch && method === 'GET') {
+        const { data, error } = await supabase.from('users').select('id, name, phone, avatar, created_at').eq('referrer_id', userTeamMatch[1]);
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true, data: { list: data } });
+      }
 
-      // 分类管理
-      if (path === '/admin/categories') {
+      // ===== 合伙人管理 =====
+      if (path === '/admin/partners' && method === 'GET') {
+        const page = parseInt(url.searchParams.get('page') || '1');
+        const pageSize = parseInt(url.searchParams.get('pageSize') || '20');
+        const { data, error, count } = await supabase.from('users').select('id, phone, name, avatar, partner_level, balance, total_income, created_at', { count: 'exact' }).eq('is_partner', true).order('created_at', { ascending: false }).range((page - 1) * pageSize, page * pageSize - 1);
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true, data: { list: data, total: count, page, pageSize } });
+      }
+      const partnerDetailMatch = path.match(/^\/admin\/partners\/([a-f0-9-]+)$/);
+      if (partnerDetailMatch && method === 'GET') {
+        const { data, error } = await supabase.from('users').select('*').eq('id', partnerDetailMatch[1]).single();
+        if (error) return res.status(404).json({ success: false, error: '合伙人不存在' });
+        return res.json({ success: true, data });
+      }
+      const partnerTeamMatch = path.match(/^\/admin\/partners\/([a-f0-9-]+)\/team$/);
+      if (partnerTeamMatch && method === 'GET') {
+        const { data, error } = await supabase.from('users').select('id, name, phone, avatar, created_at').eq('referrer_id', partnerTeamMatch[1]);
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true, data: { list: data } });
+      }
+      const partnerIncomeMatch = path.match(/^\/admin\/partners\/([a-f0-9-]+)\/income$/);
+      if (partnerIncomeMatch && method === 'GET') {
+        const { data, error } = await supabase.from('income_records').select('*').eq('user_id', partnerIncomeMatch[1]).order('created_at', { ascending: false });
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true, data: { list: data } });
+      }
+
+      // ===== 合伙人申请管理 =====
+      if (path === '/admin/partner-applications' && method === 'GET') {
+        const page = parseInt(url.searchParams.get('page') || '1');
+        const pageSize = parseInt(url.searchParams.get('pageSize') || '20');
+        const { data, error, count } = await supabase.from('partner_applications').select('*, user:users(id, name, phone)', { count: 'exact' }).order('created_at', { ascending: false }).range((page - 1) * pageSize, page * pageSize - 1);
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true, data: { list: data, total: count, page, pageSize } });
+      }
+      const appReviewMatch = path.match(/^\/admin\/partner-applications\/([a-f0-9-]+)\/review$/);
+      if (appReviewMatch && method === 'PUT') {
+        const { status, note } = req.body;
+        const app = await supabase.from('partner_applications').select('user_id, level').eq('id', appReviewMatch[1]).single();
+        if (app.data) {
+          if (status === 'approved') {
+            await supabase.from('users').update({ is_partner: true, partner_level: app.data.level || 'junior' }).eq('id', app.data.user_id);
+          }
+          await supabase.from('partner_applications').update({ status, note, reviewed_at: new Date().toISOString() }).eq('id', appReviewMatch[1]);
+        }
+        return res.json({ success: true });
+      }
+
+      // ===== 提现管理 =====
+      if (path === '/admin/withdrawals' && method === 'GET') {
+        const page = parseInt(url.searchParams.get('page') || '1');
+        const pageSize = parseInt(url.searchParams.get('pageSize') || '20');
+        const status = url.searchParams.get('status');
+        let query = supabase.from('withdrawals').select('*, user:users(id, name, phone)', { count: 'exact' });
+        if (status) query = query.eq('status', status);
+        query = query.order('created_at', { ascending: false }).range((page - 1) * pageSize, page * pageSize - 1);
+        const { data, error, count } = await query;
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true, data: { list: data, total: count, page, pageSize } });
+      }
+      const withdrawalProcessMatch = path.match(/^\/admin\/withdrawals\/([a-f0-9-]+)\/process$/);
+      if (withdrawalProcessMatch && method === 'PUT') {
+        const { status, reason } = req.body;
+        const { error } = await supabase.from('withdrawals').update({ status, reason, processed_at: new Date().toISOString() }).eq('id', withdrawalProcessMatch[1]);
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true });
+      }
+
+      // ===== 分类管理 =====
+      if (path === '/admin/categories' && method === 'GET') {
         const { data, error } = await supabase.from('categories').select('*').order('sort_order');
         if (error) return res.status(500).json({ success: false, error: error.message });
         return res.json({ success: true, data });
       }
+      if (path === '/admin/categories' && method === 'POST') {
+        const { data, error } = await supabase.from('categories').insert(req.body).select().single();
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true, data });
+      }
+      const categoryMatch = path.match(/^\/admin\/categories\/([a-f0-9-]+)$/);
+      if (categoryMatch && method === 'PUT') {
+        const { error } = await supabase.from('categories').update(req.body).eq('id', categoryMatch[1]);
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true });
+      }
+      if (categoryMatch && method === 'DELETE') {
+        const { error } = await supabase.from('categories').delete().eq('id', categoryMatch[1]);
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true });
+      }
 
-      // 轮播图管理
-      if (path === '/admin/banners') {
+      // ===== 轮播图管理 =====
+      if (path === '/admin/banners' && method === 'GET') {
         const { data, error } = await supabase.from('banners').select('*').order('sort_order');
         if (error) return res.status(500).json({ success: false, error: error.message });
         return res.json({ success: true, data });
+      }
+      if (path === '/admin/banners' && method === 'POST') {
+        const { data, error } = await supabase.from('banners').insert(req.body).select().single();
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true, data });
+      }
+      const bannerMatch = path.match(/^\/admin\/banners\/([a-f0-9-]+)$/);
+      if (bannerMatch && method === 'PUT') {
+        const { error } = await supabase.from('banners').update(req.body).eq('id', bannerMatch[1]);
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true });
+      }
+      if (bannerMatch && method === 'DELETE') {
+        const { error } = await supabase.from('banners').delete().eq('id', bannerMatch[1]);
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true });
+      }
+      const bannerStatusMatch = path.match(/^\/admin\/banners\/([a-f0-9-]+)\/status$/);
+      if (bannerStatusMatch && method === 'PUT') {
+        const { status } = req.body;
+        const { error } = await supabase.from('banners').update({ status }).eq('id', bannerStatusMatch[1]);
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true });
+      }
+
+      // ===== 公告管理 =====
+      if (path === '/admin/notifications' && method === 'GET') {
+        const { data, error } = await supabase.from('notifications').select('*').order('created_at', { ascending: false });
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true, data });
+      }
+      if (path === '/admin/notifications' && method === 'POST') {
+        const { data, error } = await supabase.from('notifications').insert(req.body).select().single();
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true, data });
+      }
+      const notificationMatch = path.match(/^\/admin\/notifications\/([a-f0-9-]+)$/);
+      if (notificationMatch && method === 'PUT') {
+        const { error } = await supabase.from('notifications').update(req.body).eq('id', notificationMatch[1]);
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true });
+      }
+      if (notificationMatch && method === 'DELETE') {
+        const { error } = await supabase.from('notifications').delete().eq('id', notificationMatch[1]);
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true });
+      }
+
+      // ===== 优惠券管理 =====
+      if (path === '/admin/coupons' && method === 'GET') {
+        const { data, error } = await supabase.from('coupons').select('*').order('created_at', { ascending: false });
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true, data });
+      }
+      if (path === '/admin/coupons' && method === 'POST') {
+        const { data, error } = await supabase.from('coupons').insert(req.body).select().single();
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true, data });
+      }
+      const couponMatch = path.match(/^\/admin\/coupons\/([a-f0-9-]+)$/);
+      if (couponMatch && method === 'GET') {
+        const { data, error } = await supabase.from('coupons').select('*').eq('id', couponMatch[1]).single();
+        if (error) return res.status(404).json({ success: false, error: '优惠券不存在' });
+        return res.json({ success: true, data });
+      }
+      if (couponMatch && method === 'PUT') {
+        const { error } = await supabase.from('coupons').update(req.body).eq('id', couponMatch[1]);
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true });
+      }
+      if (couponMatch && method === 'DELETE') {
+        const { error } = await supabase.from('coupons').delete().eq('id', couponMatch[1]);
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true });
+      }
+
+      // ===== 秒杀活动管理 =====
+      if (path === '/admin/flash-sales' && method === 'GET') {
+        const { data, error } = await supabase.from('flash_sales').select('*, product:products(id, name)').order('created_at', { ascending: false });
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true, data });
+      }
+      if (path === '/admin/flash-sales' && method === 'POST') {
+        const { data, error } = await supabase.from('flash_sales').insert(req.body).select().single();
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true, data });
+      }
+      const flashSaleMatch = path.match(/^\/admin\/flash-sales\/([a-f0-9-]+)$/);
+      if (flashSaleMatch && method === 'PUT') {
+        const { error } = await supabase.from('flash_sales').update(req.body).eq('id', flashSaleMatch[1]);
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true });
+      }
+      if (flashSaleMatch && method === 'DELETE') {
+        const { error } = await supabase.from('flash_sales').delete().eq('id', flashSaleMatch[1]);
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true });
+      }
+
+      // ===== 团购活动管理 =====
+      if (path === '/admin/group-buys' && method === 'GET') {
+        const { data, error } = await supabase.from('group_buys').select('*, product:products(id, name)').order('created_at', { ascending: false });
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true, data });
+      }
+      if (path === '/admin/group-buys' && method === 'POST') {
+        const { data, error } = await supabase.from('group_buys').insert(req.body).select().single();
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true, data });
+      }
+      const groupBuyMatch = path.match(/^\/admin\/group-buys\/([a-f0-9-]+)$/);
+      if (groupBuyMatch && method === 'PUT') {
+        const { error } = await supabase.from('group_buys').update(req.body).eq('id', groupBuyMatch[1]);
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true });
+      }
+      if (groupBuyMatch && method === 'DELETE') {
+        const { error } = await supabase.from('group_buys').delete().eq('id', groupBuyMatch[1]);
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true });
+      }
+
+      // ===== 退款管理 =====
+      if (path === '/admin/refunds' && method === 'GET') {
+        const { data, error } = await supabase.from('refunds').select('*, order:orders(order_no), user:users(id, name, phone)').order('created_at', { ascending: false });
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true, data });
+      }
+      const refundApproveMatch = path.match(/^\/admin\/refunds\/([a-f0-9-]+)\/approve$/);
+      if (refundApproveMatch && method === 'PUT') {
+        const { admin_note } = req.body;
+        const { error } = await supabase.from('refunds').update({ status: 'approved', admin_note }).eq('id', refundApproveMatch[1]);
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true });
+      }
+      const refundRejectMatch = path.match(/^\/admin\/refunds\/([a-f0-9-]+)\/reject$/);
+      if (refundRejectMatch && method === 'PUT') {
+        const { admin_note } = req.body;
+        const { error } = await supabase.from('refunds').update({ status: 'rejected', admin_note }).eq('id', refundRejectMatch[1]);
+        if (error) return res.status(500).json({ success: false, error: error.message });
+        return res.json({ success: true });
+      }
+
+      // ===== 财务统计 =====
+      if (path === '/admin/finance/stats') {
+        const { data: orders } = await supabase.from('orders').select('paid_amount').in('status', ['completed', 'shipped']);
+        const totalRevenue = orders?.reduce((sum: number, o: any) => sum + (o.paid_amount || 0), 0) || 0;
+        const { data: incomes } = await supabase.from('income_records').select('amount').in('status', ['settled', 'completed']);
+        const totalIncome = incomes?.reduce((sum: number, i: any) => sum + (i.amount || 0), 0) || 0;
+        return res.json({ success: true, data: { totalRevenue, totalIncome, pendingWithdrawals: 0 } });
+      }
+
+      // ===== 设置 =====
+      if (path === '/admin/settings' && method === 'GET') {
+        const { data, error } = await supabase.from('settings').select('*');
+        if (error) return res.json({ success: true, data: [] });
+        return res.json({ success: true, data });
+      }
+      if (path === '/admin/settings' && method === 'PUT') {
+        const settings = req.body;
+        for (const item of settings) {
+          await supabase.from('settings').upsert({ key: item.key, value: item.value }, { onConflict: 'key' });
+        }
+        return res.json({ success: true });
       }
 
       return res.status(404).json({ success: false, error: 'Admin endpoint not found' });
