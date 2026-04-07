@@ -175,6 +175,165 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // ==========================================
+    // 合伙人 API（需要登录）
+    // ==========================================
+
+    // 合伙人信息
+    if (path === '/partner/profile' && method === 'GET') {
+      const userId = getUserId(req);
+      if (!userId) return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: '请先登录' } });
+
+      const { data: user, error } = await supabase
+        .from('users')
+        .select('id, phone, name, avatar, status, is_partner, partner_level, referrer_id, invite_code, balance, total_income, created_at')
+        .eq('id', userId)
+        .single();
+
+      if (error || !user) return res.status(404).json({ success: false, error: { code: 'USER_NOT_FOUND', message: '用户不存在' } });
+
+      // 获取团队人数
+      const { count: teamSize } = await supabase.from('users').select('*', { count: 'exact', head: true }).eq('referrer_id', user.id);
+
+      // 获取本月销售额
+      const now = new Date();
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+      const { data: monthOrders } = await supabase.from('orders').select('paid_amount').eq('referrer_id', user.id).in('status', ['completed', 'shipped']).gte('created_at', monthStart);
+      const monthSales = monthOrders?.reduce((sum, o) => sum + o.paid_amount, 0) || 0;
+
+      // 获取收益统计
+      const { data: incomeStats } = await supabase.from('income_records').select('type, amount, status').eq('user_id', user.id);
+      const stats = { referral_reward: 0, sales_commission: 0, dividend: 0 };
+      incomeStats?.forEach(r => { if (r.status === 'settled' || r.status === 'completed') stats[r.type as keyof typeof stats] += r.amount; });
+
+      return res.json({
+        success: true,
+        data: {
+          ...user,
+          team_size: teamSize || 0,
+          month_sales: monthSales,
+          total_referral_reward: stats.referral_reward,
+          total_sales_commission: stats.sales_commission,
+          total_dividend: stats.dividend
+        }
+      });
+    }
+
+    // 收益明细
+    if (path === '/partner/income' && method === 'GET') {
+      const userId = getUserId(req);
+      if (!userId) return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: '请先登录' } });
+
+      const page = parseInt(url.searchParams.get('page') || '1');
+      const pageSize = parseInt(url.searchParams.get('pageSize') || '20');
+      const type = url.searchParams.get('type');
+      const status = url.searchParams.get('status');
+
+      let query = supabase.from('income_records').select('*', { count: 'exact' }).eq('user_id', userId).order('created_at', { ascending: false });
+      if (type) query = query.eq('type', type);
+      if (status) query = query.eq('status', status);
+      query = query.range((page - 1) * pageSize, page * pageSize - 1);
+
+      const { data, error, count } = await query;
+      if (error) return res.status(500).json({ success: false, error: error.message });
+      return res.json({ success: true, data: { list: data || [], total: count || 0, page, pageSize } });
+    }
+
+    // 团队成员
+    if (path === '/partner/team' && method === 'GET') {
+      const userId = getUserId(req);
+      if (!userId) return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: '请先登录' } });
+
+      const page = parseInt(url.searchParams.get('page') || '1');
+      const pageSize = parseInt(url.searchParams.get('pageSize') || '20');
+
+      const { data, error, count } = await supabase
+        .from('users')
+        .select('id, name, phone, avatar, partner_level, created_at', { count: 'exact' })
+        .eq('referrer_id', userId)
+        .order('created_at', { ascending: false })
+        .range((page - 1) * pageSize, page * pageSize - 1);
+
+      if (error) return res.status(500).json({ success: false, error: error.message });
+      return res.json({ success: true, data: { list: data || [], total: count || 0, page, pageSize } });
+    }
+
+    // 申请成为合伙人
+    if (path === '/partner/apply' && method === 'POST') {
+      const userId = getUserId(req);
+      if (!userId) return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: '请先登录' } });
+
+      const { level = 'junior' } = req.body;
+
+      // 检查是否已经是合伙人
+      const { data: user } = await supabase.from('users').select('is_partner').eq('id', userId).single();
+      if (user?.is_partner) return res.status(400).json({ success: false, error: { code: 'ALREADY_PARTNER', message: '您已经是合伙人' } });
+
+      // 检查是否有待审核申请
+      const { data: existing } = await supabase.from('partner_applications').select('*').eq('user_id', userId).eq('status', 'pending').single();
+      if (existing) return res.status(400).json({ success: false, error: { code: 'APPLICATION_EXISTS', message: '您已提交申请，请等待审核' } });
+
+      const { error } = await supabase.from('partner_applications').insert({ user_id: userId, status: 'pending', level });
+      if (error) return res.status(500).json({ success: false, error: { code: 'APPLY_FAILED', message: '申请失败' } });
+
+      return res.json({ success: true, message: '申请已提交，请等待审核' });
+    }
+
+    // 提现申请
+    if (path === '/partner/withdraw' && method === 'POST') {
+      const userId = getUserId(req);
+      if (!userId) return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: '请先登录' } });
+
+      const { amount, method: withdrawMethod, account_info } = req.body;
+      if (!amount || amount <= 0) return res.status(400).json({ success: false, error: { code: 'INVALID_AMOUNT', message: '请输入正确的提现金额' } });
+      if (amount < 10) return res.status(400).json({ success: false, error: { code: 'AMOUNT_TOO_SMALL', message: '最低提现金额为10元' } });
+
+      // 获取用户余额
+      const { data: user } = await supabase.from('users').select('balance, status').eq('id', userId).single();
+      if (!user) return res.status(404).json({ success: false, error: { code: 'USER_NOT_FOUND', message: '用户不存在' } });
+      if (user.status === 'frozen') return res.status(403).json({ success: false, error: { code: 'USER_FROZEN', message: '账号已冻结' } });
+      if (user.balance < amount) return res.status(400).json({ success: false, error: { code: 'INSUFFICIENT_BALANCE', message: '余额不足' } });
+
+      // 生成提现单号
+      const withdrawalNo = `WD${Date.now()}${Math.random().toString(36).substring(2, 5).toUpperCase()}`;
+      const fee = Math.ceil(amount * 0.003 * 100) / 100;
+      const actualAmount = amount - fee;
+
+      // 扣减余额
+      const { error: balanceError } = await supabase.from('users').update({ balance: user.balance - amount }).eq('id', userId).gte('balance', amount);
+      if (balanceError) return res.status(400).json({ success: false, error: { code: 'INSUFFICIENT_BALANCE', message: '余额不足' } });
+
+      // 创建提现记录
+      const { data: withdrawal, error } = await supabase.from('withdrawals').insert({
+        withdrawal_no: withdrawalNo, user_id: userId, amount, fee, actual_amount: actualAmount, method: withdrawMethod, account_info, status: 'pending'
+      }).select().single();
+
+      if (error) {
+        await supabase.from('users').update({ balance: user.balance }).eq('id', userId);
+        return res.status(500).json({ success: false, error: { code: 'WITHDRAW_FAILED', message: '提现申请失败' } });
+      }
+
+      return res.json({ success: true, data: withdrawal, message: '提现申请已提交' });
+    }
+
+    // 提现记录
+    if (path === '/partner/withdrawals' && method === 'GET') {
+      const userId = getUserId(req);
+      if (!userId) return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: '请先登录' } });
+
+      const page = parseInt(url.searchParams.get('page') || '1');
+      const pageSize = parseInt(url.searchParams.get('pageSize') || '20');
+      const status = url.searchParams.get('status');
+
+      let query = supabase.from('withdrawals').select('*', { count: 'exact' }).eq('user_id', userId).order('created_at', { ascending: false });
+      if (status) query = query.eq('status', status);
+      query = query.range((page - 1) * pageSize, page * pageSize - 1);
+
+      const { data, error, count } = await query;
+      if (error) return res.status(500).json({ success: false, error: error.message });
+      return res.json({ success: true, data: { list: data || [], total: count || 0, page, pageSize } });
+    }
+
+    // ==========================================
     // 认证 API
     // ==========================================
 
