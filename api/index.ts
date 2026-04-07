@@ -1025,6 +1025,85 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.json({ success: true });
       }
 
+      // ===== 分销配置 =====
+      if (path === '/admin/distribution-settings' && method === 'GET') {
+        const { data, error } = await supabase.from('settings').select('*').in('key', [
+          'partner_referral_reward', 'partner_sales_commission_rate',
+          'partner_one_star_direct', 'partner_two_star_direct_one', 'partner_two_star_direct',
+          'partner_pool_inject_amount', 'partner_pool_period', 'partner_pool_algorithm'
+        ]);
+        if (error) return res.json({ success: true, data: {} });
+        // 转换为对象格式
+        const settingsMap: Record<string, string> = {};
+        data?.forEach(s => { settingsMap[s.key] = s.value; });
+        return res.json({ success: true, data: settingsMap });
+      }
+      if (path === '/admin/distribution-settings' && method === 'PUT') {
+        const { settings } = req.body;
+        if (settings && Array.isArray(settings)) {
+          for (const item of settings) {
+            await supabase.from('settings').upsert({ key: item.key, value: item.value }, { onConflict: 'key' });
+          }
+        }
+        return res.json({ success: true });
+      }
+
+      // ===== 收益记录 =====
+      if (path === '/admin/income-records' && method === 'GET') {
+        const page = parseInt(url.searchParams.get('page') || '1');
+        const pageSize = parseInt(url.searchParams.get('pageSize') || '10');
+        const type = url.searchParams.get('type');
+        const keyword = url.searchParams.get('keyword');
+
+        let query = supabase.from('income_records').select('*', { count: 'exact' });
+        if (type) query = query.eq('type', type);
+        query = query.order('created_at', { ascending: false }).range((page - 1) * pageSize, page * pageSize - 1);
+
+        const { data, error, count } = await query;
+        if (error) return res.status(500).json({ success: false, error: error.message });
+
+        // 获取用户信息
+        if (data && data.length > 0) {
+          const userIds = data.map(r => r.user_id).filter(Boolean);
+          if (userIds.length > 0) {
+            const { data: users } = await supabase.from('users').select('id, name, phone').in('id', userIds);
+            const userMap = new Map(users?.map(u => [u.id, u]) || []);
+            data.forEach(r => { r.user = userMap.get(r.user_id) || null; });
+          }
+        }
+
+        return res.json({ success: true, data: { list: data || [], total: count || 0, page, pageSize } });
+      }
+
+      // ===== 销售排行榜 =====
+      if (path === '/admin/sales-leaderboard' && method === 'GET') {
+        const period = url.searchParams.get('period') || 'month';
+        const limit = parseInt(url.searchParams.get('limit') || '50');
+
+        // 获取合伙人用户
+        const { data: partners, error } = await supabase.from('users')
+          .select('id, name, phone, partner_level, total_income, created_at')
+          .eq('is_partner', true)
+          .order('total_income', { ascending: false })
+          .limit(limit);
+
+        if (error) return res.status(500).json({ success: false, error: error.message });
+
+        // 计算团队销售额（简化版：使用 total_income 作为参考）
+        const leaderboard = partners?.map((p, index) => ({
+          rank: index + 1,
+          id: p.id,
+          name: p.name || '未知',
+          phone: p.phone || '-',
+          level: p.partner_level || 'junior',
+          team_sales: p.total_income || 0,  // 简化处理
+          personal_sales: p.total_income || 0,
+          total_earnings: p.total_income || 0
+        })) || [];
+
+        return res.json({ success: true, data: leaderboard });
+      }
+
       return res.status(404).json({ success: false, error: 'Admin endpoint not found' });
     }
 
