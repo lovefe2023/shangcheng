@@ -1,107 +1,128 @@
 /**
- * Vercel Serverless API - 完整版
- * 静态导入所有路由模块
+ * Vercel Serverless API - 诊断版
  */
 
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import express from 'express';
-import cors from 'cors';
-import helmet from 'helmet';
-import compression from 'compression';
-
-// 导入路由模块
-import authRoutes from '../server/routes/auth';
-import productsRoutes from '../server/routes/products';
-import ordersRoutes from '../server/routes/orders';
-import partnersRoutes from '../server/routes/partners';
-import marketingRoutes from '../server/routes/marketing';
-import adminRoutes from '../server/routes/admin';
-import partnerPackagesRoutes from '../server/routes/partnerPackages';
-import cellarRoutes from '../server/routes/cellar';
-import uploadRoutes from '../server/routes/upload';
-
-const app = express();
-
-// ============================================
-// 中间件配置
-// ============================================
-
-app.use(cors({ origin: true, credentials: true }));
-app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
-app.use(compression());
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-
-// ============================================
-// 挂载路由
-// ============================================
-
-// 健康检查
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
-
-// 认证路由
-app.use('/auth', authRoutes);
-
-// 商品路由
-app.use('/products', productsRoutes);
-
-// 订单和购物车路由
-app.use('/orders', ordersRoutes);
-
-// 合伙人路由
-app.use('/partner', partnersRoutes);
-
-// 营销活动路由（优惠券、秒杀、团购、轮播图、公告、地址）
-app.use('/', marketingRoutes);
-
-// 合伙人礼包路由
-app.use('/partner-packages', partnerPackagesRoutes);
-
-// 酒窖路由
-app.use('/cellar', cellarRoutes);
-
-// 上传路由
-app.use('/upload', uploadRoutes);
-
-// 后台管理路由
-app.use('/admin', adminRoutes);
-
-// ============================================
-// 错误处理
-// ============================================
-
-// 404
-app.use((_req, res) => {
-  res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: '接口不存在' } });
-});
-
-// 全局错误处理
-app.use((err: Error, _req: any, res: any, _next: any) => {
-  console.error('Server error:', err);
-  res.status(500).json({ success: false, error: { code: 'SERVER_ERROR', message: '服务器错误' } });
-});
-
-// ============================================
-// Vercel Handler
-// ============================================
+import { createClient } from '@supabase/supabase-js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // 处理 OPTIONS 预检请求
+  // CORS
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
   if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
+    return res.status(200).end();
   }
 
-  // 移除 /api 前缀
-  const originalUrl = req.url || '/';
-  req.url = originalUrl.replace(/^\/api/, '') || '/';
+  const path = req.url?.replace('/api', '') || '/';
 
-  return new Promise<void>((resolve, reject) => {
-    app(req as any, res as any, (err?: Error) => {
-      if (err) reject(err);
-      else resolve();
+  try {
+    // 初始化 Supabase
+    const supabaseUrl = process.env.VITE_SUPABASE_URL;
+    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+    if (!supabaseUrl || !serviceKey) {
+      return res.status(500).json({
+        success: false,
+        error: 'Missing Supabase credentials',
+        env_check: {
+          has_url: !!supabaseUrl,
+          has_key: !!serviceKey
+        }
+      });
+    }
+
+    const supabase = createClient(supabaseUrl, serviceKey, {
+      auth: { autoRefreshToken: false, persistSession: false }
     });
-  });
+
+    // 路由处理
+    if (path === '/health' || path === '/') {
+      return res.json({ status: 'ok', timestamp: new Date().toISOString() });
+    }
+
+    // 商品列表
+    if (path === '/products') {
+      const { data, error } = await supabase
+        .from('products')
+        .select('*, category:categories(id, name)', { count: 'exact' })
+        .eq('status', 'on_shelves')
+        .limit(20);
+
+      if (error) {
+        return res.status(500).json({ success: false, error: error.message });
+      }
+
+      return res.json({ success: true, data: { list: data, total: data?.length || 0 } });
+    }
+
+    // 轮播图
+    if (path === '/banners') {
+      const { data, error } = await supabase
+        .from('banners')
+        .select('*')
+        .eq('status', 'visible')
+        .order('sort_order');
+
+      if (error) {
+        return res.status(500).json({ success: false, error: error.message });
+      }
+
+      return res.json({ success: true, data });
+    }
+
+    // 秒杀活动
+    if (path === '/flash-sales') {
+      const { data, error } = await supabase
+        .from('flash_sales')
+        .select('*, product:products(id, name, images, original_price)');
+
+      if (error) {
+        return res.status(500).json({ success: false, error: error.message });
+      }
+
+      return res.json({ success: true, data });
+    }
+
+    // 分类列表
+    if (path === '/products/categories/list' || path === '/categories') {
+      const { data, error } = await supabase
+        .from('categories')
+        .select('*')
+        .order('sort_order');
+
+      if (error) {
+        return res.status(500).json({ success: false, error: error.message });
+      }
+
+      return res.json({ success: true, data });
+    }
+
+    // 商品详情
+    const productMatch = path.match(/^\/products\/([a-f0-9-]+)$/);
+    if (productMatch) {
+      const { data, error } = await supabase
+        .from('products')
+        .select('*, category:categories(id, name)')
+        .eq('id', productMatch[1])
+        .single();
+
+      if (error) {
+        return res.status(404).json({ success: false, error: '商品不存在' });
+      }
+
+      return res.json({ success: true, data });
+    }
+
+    return res.status(404).json({ success: false, error: 'Not found', path });
+
+  } catch (err: any) {
+    console.error('API Error:', err);
+    return res.status(500).json({
+      success: false,
+      error: err.message || 'Server error',
+      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
+  }
 }
