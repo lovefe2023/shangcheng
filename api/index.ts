@@ -478,6 +478,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.json({ success: true, message: '已添加到购物车' });
     }
 
+    // 更新购物车商品（数量/选中状态）
+    const cartItemMatch = path.match(/^\/orders\/cart\/([a-f0-9-]+)$/);
+    if (cartItemMatch && method === 'PUT') {
+      const userId = getUserId(req);
+      if (!userId) return res.status(401).json({ success: false, error: '未登录' });
+
+      const { quantity, selected } = req.body;
+      const updateData: any = {};
+      if (quantity !== undefined) updateData.quantity = quantity;
+      if (selected !== undefined) updateData.selected = selected;
+
+      const { error } = await supabase.from('cart_items').update(updateData).eq('id', cartItemMatch[1]).eq('user_id', userId);
+      if (error) return res.status(500).json({ success: false, error: error.message });
+      return res.json({ success: true, message: '更新成功' });
+    }
+
+    // 删除购物车商品
+    if (cartItemMatch && method === 'DELETE') {
+      const userId = getUserId(req);
+      if (!userId) return res.status(401).json({ success: false, error: '未登录' });
+
+      const { error } = await supabase.from('cart_items').delete().eq('id', cartItemMatch[1]).eq('user_id', userId);
+      if (error) return res.status(500).json({ success: false, error: error.message });
+      return res.json({ success: true, message: '删除成功' });
+    }
+
     // 订单列表
     if (path === '/orders' && method === 'GET') {
       const userId = getUserId(req);
