@@ -592,19 +592,43 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const pageSize = parseInt(url.searchParams.get('pageSize') || '20');
         const status = url.searchParams.get('status');
 
-        let query = supabase.from('orders').select('*, user:users(id, name, phone)', { count: 'exact' });
+        let query = supabase.from('orders').select('*', { count: 'exact' });
         if (status) query = query.eq('status', status);
         query = query.order('created_at', { ascending: false }).range((page - 1) * pageSize, page * pageSize - 1);
 
         const { data, error, count } = await query;
         if (error) return res.status(500).json({ success: false, error: error.message });
+
+        // 获取用户信息
+        if (data && data.length > 0) {
+          const userIds = data.map(o => o.user_id).filter(Boolean);
+          if (userIds.length > 0) {
+            const { data: users } = await supabase.from('users').select('id, name, phone').in('id', userIds);
+            const userMap = new Map(users?.map(u => [u.id, u]) || []);
+            data.forEach(order => {
+              order.user = userMap.get(order.user_id) || null;
+            });
+          }
+        }
+
         return res.json({ success: true, data: { list: data, total: count, page, pageSize } });
       }
       const orderDetailMatch = path.match(/^\/admin\/orders\/([a-f0-9-]+)$/);
       if (orderDetailMatch && method === 'GET') {
-        const { data, error } = await supabase.from('orders').select('*, items:order_items(*), user:users(id, name, phone)').eq('id', orderDetailMatch[1]).single();
+        const { data: order, error } = await supabase.from('orders').select('*').eq('id', orderDetailMatch[1]).single();
         if (error) return res.status(404).json({ success: false, error: '订单不存在' });
-        return res.json({ success: true, data });
+
+        // 获取订单商品
+        const { data: items } = await supabase.from('order_items').select('*').eq('order_id', orderDetailMatch[1]);
+        order.items = items || [];
+
+        // 获取用户信息
+        if (order.user_id) {
+          const { data: user } = await supabase.from('users').select('id, name, phone').eq('id', order.user_id).single();
+          order.user = user || null;
+        }
+
+        return res.json({ success: true, data: order });
       }
       const orderShipMatch = path.match(/^\/admin\/orders\/([a-f0-9-]+)\/ship$/);
       if (orderShipMatch && method === 'PUT') {
@@ -709,8 +733,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (path === '/admin/partner-applications' && method === 'GET') {
         const page = parseInt(url.searchParams.get('page') || '1');
         const pageSize = parseInt(url.searchParams.get('pageSize') || '20');
-        const { data, error, count } = await supabase.from('partner_applications').select('*, user:users(id, name, phone)', { count: 'exact' }).order('created_at', { ascending: false }).range((page - 1) * pageSize, page * pageSize - 1);
+        const { data, error, count } = await supabase.from('partner_applications').select('*', { count: 'exact' }).order('created_at', { ascending: false }).range((page - 1) * pageSize, page * pageSize - 1);
         if (error) return res.status(500).json({ success: false, error: error.message });
+
+        // 获取用户信息
+        if (data && data.length > 0) {
+          const userIds = data.map(a => a.user_id).filter(Boolean);
+          if (userIds.length > 0) {
+            const { data: users } = await supabase.from('users').select('id, name, phone').in('id', userIds);
+            const userMap = new Map(users?.map(u => [u.id, u]) || []);
+            data.forEach(app => { app.user = userMap.get(app.user_id) || null; });
+          }
+        }
+
         return res.json({ success: true, data: { list: data, total: count, page, pageSize } });
       }
       const appReviewMatch = path.match(/^\/admin\/partner-applications\/([a-f0-9-]+)\/review$/);
@@ -731,11 +766,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const page = parseInt(url.searchParams.get('page') || '1');
         const pageSize = parseInt(url.searchParams.get('pageSize') || '20');
         const status = url.searchParams.get('status');
-        let query = supabase.from('withdrawals').select('*, user:users(id, name, phone)', { count: 'exact' });
+        let query = supabase.from('withdrawals').select('*', { count: 'exact' });
         if (status) query = query.eq('status', status);
         query = query.order('created_at', { ascending: false }).range((page - 1) * pageSize, page * pageSize - 1);
         const { data, error, count } = await query;
         if (error) return res.status(500).json({ success: false, error: error.message });
+
+        // 获取用户信息
+        if (data && data.length > 0) {
+          const userIds = data.map(w => w.user_id).filter(Boolean);
+          if (userIds.length > 0) {
+            const { data: users } = await supabase.from('users').select('id, name, phone').in('id', userIds);
+            const userMap = new Map(users?.map(u => [u.id, u]) || []);
+            data.forEach(w => { w.user = userMap.get(w.user_id) || null; });
+          }
+        }
+
         return res.json({ success: true, data: { list: data, total: count, page, pageSize } });
       }
       const withdrawalProcessMatch = path.match(/^\/admin\/withdrawals\/([a-f0-9-]+)\/process$/);
@@ -852,8 +898,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       // ===== 秒杀活动管理 =====
       if (path === '/admin/flash-sales' && method === 'GET') {
-        const { data, error } = await supabase.from('flash_sales').select('*, product:products(id, name)').order('created_at', { ascending: false });
+        const { data, error } = await supabase.from('flash_sales').select('*').order('created_at', { ascending: false });
         if (error) return res.status(500).json({ success: false, error: error.message });
+
+        // 获取商品信息
+        if (data && data.length > 0) {
+          const productIds = data.map(f => f.product_id).filter(Boolean);
+          if (productIds.length > 0) {
+            const { data: products } = await supabase.from('products').select('id, name').in('id', productIds);
+            const productMap = new Map(products?.map(p => [p.id, p]) || []);
+            data.forEach(f => { f.product = productMap.get(f.product_id) || null; });
+          }
+        }
+
         return res.json({ success: true, data });
       }
       if (path === '/admin/flash-sales' && method === 'POST') {
@@ -875,8 +932,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       // ===== 团购活动管理 =====
       if (path === '/admin/group-buys' && method === 'GET') {
-        const { data, error } = await supabase.from('group_buys').select('*, product:products(id, name)').order('created_at', { ascending: false });
+        const { data, error } = await supabase.from('group_buys').select('*').order('created_at', { ascending: false });
         if (error) return res.status(500).json({ success: false, error: error.message });
+
+        // 获取商品信息
+        if (data && data.length > 0) {
+          const productIds = data.map(g => g.product_id).filter(Boolean);
+          if (productIds.length > 0) {
+            const { data: products } = await supabase.from('products').select('id, name').in('id', productIds);
+            const productMap = new Map(products?.map(p => [p.id, p]) || []);
+            data.forEach(g => { g.product = productMap.get(g.product_id) || null; });
+          }
+        }
+
         return res.json({ success: true, data });
       }
       if (path === '/admin/group-buys' && method === 'POST') {
@@ -898,8 +966,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       // ===== 退款管理 =====
       if (path === '/admin/refunds' && method === 'GET') {
-        const { data, error } = await supabase.from('refunds').select('*, order:orders(order_no), user:users(id, name, phone)').order('created_at', { ascending: false });
+        const { data, error } = await supabase.from('refunds').select('*').order('created_at', { ascending: false });
         if (error) return res.status(500).json({ success: false, error: error.message });
+
+        // 获取订单和用户信息
+        if (data && data.length > 0) {
+          const orderIds = data.map(r => r.order_id).filter(Boolean);
+          const userIds = data.map(r => r.user_id).filter(Boolean);
+          if (orderIds.length > 0) {
+            const { data: orders } = await supabase.from('orders').select('id, order_no').in('id', orderIds);
+            const orderMap = new Map(orders?.map(o => [o.id, o]) || []);
+            data.forEach(r => { r.order = orderMap.get(r.order_id) || null; });
+          }
+          if (userIds.length > 0) {
+            const { data: users } = await supabase.from('users').select('id, name, phone').in('id', userIds);
+            const userMap = new Map(users?.map(u => [u.id, u]) || []);
+            data.forEach(r => { r.user = userMap.get(r.user_id) || null; });
+          }
+        }
+
         return res.json({ success: true, data });
       }
       const refundApproveMatch = path.match(/^\/admin\/refunds\/([a-f0-9-]+)\/approve$/);
