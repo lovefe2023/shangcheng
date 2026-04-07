@@ -13,16 +13,12 @@ coverage/
 .claude/
 memory/
 
-# Express server - not used on Vercel (api/index.ts replaces it)
-server/
-
 # Test files
 test_*.png
 test_*.py
 test_*.mjs
 test_*.sh
 test_screenshots/
-scripts/
 
 # Docker deploy - not used on Vercel
 Dockerfile
@@ -36,5 +32,5 @@ ecosystem.config.js
 *.md
 !README.md
 
-# Uploads - local storage, not for Vercel
-uploads/
+# Server uploads (user uploaded files)
+server/uploads/
